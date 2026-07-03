@@ -22,21 +22,26 @@ import (
 // It carries the predefined, non-secret build context (the MIABI_* variables);
 // secrets and the ready-to-use registry login are injected separately per job.
 type JobSpec struct {
-	RunID       uint       `json:"run_id"`
-	RunNumber   int        `json:"run_number"`
-	Pipeline    string     `json:"pipeline"`
-	WorkspaceID uint       `json:"workspace_id"`
-	Workspace   string     `json:"workspace"` // workspace handle (MIABI_WORKSPACE_NAME)
-	AppID       *uint      `json:"app_id,omitempty"`
-	App         string     `json:"app,omitempty"`
-	Commit      string     `json:"commit,omitempty"`
-	Ref         string     `json:"ref,omitempty"`
-	Branch      string     `json:"branch,omitempty"`
-	Repository  string     `json:"repository,omitempty"` // fully-qualified image repo to push to
-	Registry    string     `json:"registry,omitempty"`   // registry host
-	Steps       []StepSpec `json:"steps"`
-	Env         []string   `json:"env,omitempty"` // KEY=VALUE, non-secret MIABI_* context
-	Deadline    time.Time  `json:"deadline"`      // hard job deadline (per-job cap)
+	RunID       uint   `json:"run_id"`
+	RunNumber   int    `json:"run_number"`
+	Pipeline    string `json:"pipeline"`
+	WorkspaceID uint   `json:"workspace_id"`
+	Workspace   string `json:"workspace"` // workspace handle (MIABI_WORKSPACE_NAME)
+	AppID       *uint  `json:"app_id,omitempty"`
+	App         string `json:"app,omitempty"`
+	Commit      string `json:"commit,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	// SourceURL is the git remote the runner clones and checks out at Commit into
+	// the workdir before running steps. Empty means the workspace is pre-populated
+	// (or the job runs no build). Any credential is carried in the URL or the
+	// injected job env, never logged.
+	SourceURL  string     `json:"source_url,omitempty"`
+	Repository string     `json:"repository,omitempty"` // fully-qualified image repo to push to
+	Registry   string     `json:"registry,omitempty"`   // registry host
+	Steps      []StepSpec `json:"steps"`
+	Env        []string   `json:"env,omitempty"` // KEY=VALUE, non-secret MIABI_* context
+	Deadline   time.Time  `json:"deadline"`      // hard job deadline (per-job cap)
 }
 
 // StepSpec is one step of a run, executed in an isolated container on the runner.

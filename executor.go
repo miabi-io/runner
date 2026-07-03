@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	"github.com/miabi-io/runner/proto"
 )
@@ -18,23 +17,20 @@ type StepResult struct {
 	Digest string // image digest a build step pushed (sha256:…), empty otherwise
 }
 
-// Executor runs a single job step in isolation on the runner and streams its
-// output via log. The job protocol is executor-agnostic on purpose: the
-// rootless Docker/BuildKit backend drops in behind this interface without
-// touching the wire contract or the run loop.
+// Executor prepares a job and runs its steps on the runner's local container
+// backend. The concrete backend (docker CLI here; rootless BuildKit/Kaniko
+// later) sits behind this interface, so the job protocol and run loop never
+// change when the backend does.
 type Executor interface {
-	Run(ctx context.Context, job proto.JobSpec, step proto.StepSpec, log func(line string)) (StepResult, error)
+	// Begin sets up the job — checkout source, registry login — and returns a
+	// JobRun to execute steps. An error fails the whole job. Setup output is
+	// streamed via log.
+	Begin(ctx context.Context, job proto.JobSpec, log func(line string)) (JobRun, error)
 }
 
-// ErrNoExecutor is returned by the default executor. A runner with no build
-// backend configured fails a job loudly rather than silently reporting success.
-var ErrNoExecutor = errors.New("no build backend configured on this runner")
-
-// unconfiguredExecutor is the safe default until a Docker/BuildKit executor is
-// wired (a later phase): it refuses every step so a misconfigured runner cannot
-// report bogus successes.
-type unconfiguredExecutor struct{}
-
-func (unconfiguredExecutor) Run(context.Context, proto.JobSpec, proto.StepSpec, func(string)) (StepResult, error) {
-	return StepResult{}, ErrNoExecutor
+// JobRun executes the steps of one prepared job and releases its workspace on
+// Close.
+type JobRun interface {
+	Step(ctx context.Context, step proto.StepSpec, log func(line string)) (StepResult, error)
+	Close()
 }
