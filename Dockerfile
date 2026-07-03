@@ -20,7 +20,7 @@ LABEL org.opencontainers.image.title="Miabi Runner" \
       org.opencontainers.image.source="https://github.com/miabi-io/runner" \
       org.opencontainers.image.documentation="https://github.com/miabi-io/runner#readme" \
       org.opencontainers.image.licenses="Apache-2.0"
-RUN apk add --no-cache ca-certificates && adduser -D -u 10001 runner
+
+RUN apk add --no-cache ca-certificates docker-cli git
 COPY --from=build /miabi-runner /usr/local/bin/miabi-runner
-USER runner
 ENTRYPOINT ["miabi-runner"]
