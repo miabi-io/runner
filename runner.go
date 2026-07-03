@@ -38,6 +38,7 @@ type Config struct {
 	Token      string // registration token (mbr_...)
 	Insecure   bool   // skip TLS verification of the control plane
 	Version    string // runner build version, reported to the control plane
+	Builder    string // build backend: "docker" (default) or "buildkit" (rootless)
 }
 
 // Run connects to the control plane and stays registered until ctx is
@@ -45,10 +46,15 @@ type Config struct {
 // (WebSocket + yamux, framing, keepalive) is the shared wstunnel module, so the
 // runner and control plane are guaranteed to speak the same wire protocol.
 func Run(ctx context.Context, cfg Config) error {
-	// The build backend that actually executes steps is wired in a later phase
-	// (rootless Docker/BuildKit). Until then jobs fail loudly rather than
-	// reporting bogus successes.
-	exec := Executor(unconfiguredExecutor{})
+	// Pick the build backend: rootless BuildKit (daemonless, no docker.sock) or
+	// the local Docker daemon (also supports container steps). Both run on the
+	// runner's own machine, never a hosting node.
+	var exec Executor
+	if cfg.Builder == "buildkit" {
+		exec = newBuildkitExecutor()
+	} else {
+		exec = newDockerExecutor()
+	}
 	opts := wstunnel.ClientOptions{
 		URL:      wstunnel.URL(cfg.ControlURL, connectPath),
 		Header:   authHeader(cfg),
@@ -93,4 +99,3 @@ func authHeader(cfg Config) http.Header {
 	h.Set("X-Runner-Version", cfg.Version)
 	return h
 }
-

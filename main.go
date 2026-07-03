@@ -29,6 +29,7 @@
 //	                                       (falls back to MIABI_API_URL)
 //	MIABI_RUNNER_TOKEN                 registration token issued when the runner was added (mbr_...)
 //	MIABI_RUNNER_INSECURE_SKIP_VERIFY skip TLS verification of the control plane (default false)
+//	MIABI_RUNNER_BUILDER              build backend: "docker" (default) or "buildkit" (rootless)
 package main
 
 import (
@@ -59,6 +60,7 @@ func main() {
 		Token:      token,
 		Insecure:   insecure,
 		Version:    version,
+		Builder:    goutils.Env("MIABI_RUNNER_BUILDER", "docker"),
 	}
 	if cfg.ControlURL == "" || cfg.Token == "" {
 		logger.Fatal("MIABI_CONTROL_URL and MIABI_RUNNER_TOKEN are required")

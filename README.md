@@ -11,10 +11,6 @@ Docker socket** to the control plane — it uses its own local Docker/BuildKit
 daemon. The tunnel exists so the control plane can lease build jobs to it and
 stream logs/status back.
 
-> **Status:** registration + heartbeat (this phase). Job leasing, isolated step
-> execution, and rootless build/push land in later phases. The transport is the
-> shared [`wstunnel`](https://github.com/miabi-io/wstunnel) module, so the runner
-> and control plane always speak the same wire protocol.
 
 ## Run
 
@@ -25,7 +21,7 @@ Register a runner in the Miabi UI (**Settings → Runners → Add runner**, or
 docker run -d --name miabi-runner \
   -e MIABI_CONTROL_URL=https://panel.example.com \
   -e MIABI_RUNNER_TOKEN=mbr_xxxxxxxx \
-  ghcr.io/miabi-io/miabi-runner:latest
+  miabi/runner:latest
 ```
 
 Or as a binary: `MIABI_CONTROL_URL=… MIABI_RUNNER_TOKEN=… ./miabi-runner`.
@@ -37,6 +33,7 @@ Or as a binary: `MIABI_CONTROL_URL=… MIABI_RUNNER_TOKEN=… ./miabi-runner`.
 | `MIABI_CONTROL_URL` | yes | Control plane base URL (falls back to `MIABI_API_URL`) |
 | `MIABI_RUNNER_TOKEN` | yes | Registration token issued when the runner was added (`mbr_…`) |
 | `MIABI_RUNNER_INSECURE_SKIP_VERIFY` | no | Skip TLS verification of the control plane (dev only; default false) |
+| `MIABI_RUNNER_BUILDER` | no | Build backend: `docker` (default; also runs container steps) or `buildkit` (rootless/daemonless, build-only, no docker.sock) |
 | `MIABI_DEV_MODE` | no | Debug logging (default false) |
 
 The runner reports its OS/arch/version to the control plane on connect (used for

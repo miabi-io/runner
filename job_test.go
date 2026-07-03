@@ -22,7 +22,14 @@ type fakeExecutor struct {
 	logs    map[int]string
 }
 
-func (f fakeExecutor) Run(_ context.Context, _ proto.JobSpec, step proto.StepSpec, log func(string)) (StepResult, error) {
+func (f fakeExecutor) Begin(context.Context, proto.JobSpec, func(string)) (JobRun, error) {
+	return fakeRun(f), nil
+}
+
+type fakeRun fakeExecutor
+
+func (f fakeRun) Close() {}
+func (f fakeRun) Step(_ context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	if line, ok := f.logs[step.Ordinal]; ok {
 		log(line)
 	}

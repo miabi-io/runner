@@ -20,11 +20,15 @@ const (
 	statusFailed    = "failed"
 )
 
-// runJob reads the JobSpec that opens a job stream, executes each step in order
-// with exec, and streams report frames back over the same stream, closing with a
-// terminal Done (or Error) frame. JobSpec.Deadline bounds the whole run. It stops
-// at the first failing step (non-zero exit or executor error), mirroring the
-// control plane's sequential pipeline semantics.
+// jobLog is the step ordinal for job-level (setup/checkout) log lines that don't
+// belong to a specific step.
+const jobLog = -1
+
+// runJob reads the JobSpec that opens a job stream, prepares the job workspace,
+// executes each step in order, and streams report frames back over the same
+// stream, closing with a terminal Done (or Error) frame. JobSpec.Deadline bounds
+// the whole run. It stops at the first failing step (non-zero exit or executor
+// error), mirroring the control plane's sequential pipeline semantics.
 func runJob(ctx context.Context, stream io.ReadWriter, exec Executor) error {
 	job, err := proto.ReadJob(stream)
 	if err != nil {
@@ -38,6 +42,14 @@ func runJob(ctx context.Context, stream io.ReadWriter, exec Executor) error {
 		defer cancel()
 	}
 
+	run, err := exec.Begin(ctx, job, func(line string) { _ = fw.Log(jobLog, line) })
+	if err != nil {
+		_ = fw.Err("prepare job: " + err.Error())
+		_ = fw.Done(statusFailed)
+		return err
+	}
+	defer run.Close()
+
 	for _, step := range job.Steps {
 		if err := ctx.Err(); err != nil {
 			_ = fw.Err("job canceled: " + err.Error())
@@ -46,7 +58,7 @@ func runJob(ctx context.Context, stream io.ReadWriter, exec Executor) error {
 		}
 		_ = fw.Step(step.Ordinal, statusRunning)
 
-		res, runErr := exec.Run(ctx, job, step, func(line string) {
+		res, runErr := run.Step(ctx, step, func(line string) {
 			_ = fw.Log(step.Ordinal, line)
 		})
 		if runErr != nil {
