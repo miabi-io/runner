@@ -52,6 +52,23 @@ type StepSpec struct {
 	Image   string   `json:"image,omitempty"` // container image for a custom step
 	Env     []string `json:"env,omitempty"`   // KEY=VALUE, step-scoped
 	Run     []string `json:"run,omitempty"`   // command for a container step
+	// Build configures a build step (Uses=="build"): how to turn the checked-out
+	// source into an image. Nil (or an empty Method) means auto-detect — a root
+	// Dockerfile selects a Dockerfile build, otherwise Cloud Native Buildpacks.
+	Build *BuildConfig `json:"build,omitempty"`
+}
+
+type BuildConfig struct {
+	// Method is "" | "auto" | "dockerfile" | "buildpack" (empty/auto auto-detects).
+	Method string `json:"method,omitempty"`
+	// Dockerfile is the Dockerfile path for the dockerfile method (default "Dockerfile").
+	Dockerfile string `json:"dockerfile,omitempty"`
+	// Builder is the CNB builder image for the buildpack method (empty = runner default).
+	Builder string `json:"builder,omitempty"`
+	// Buildpacks are extra buildpacks to apply (pack --buildpack).
+	Buildpacks []string `json:"buildpacks,omitempty"`
+	// BuildEnv is build-time env for the buildpack method (pack --env KEY=VALUE).
+	BuildEnv map[string]string `json:"build_env,omitempty"`
 }
 
 // FrameType is the kind of report a runner sends back.

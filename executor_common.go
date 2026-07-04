@@ -14,10 +14,83 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/miabi-io/runner/proto"
 )
+
+// defaultBuilder is the CNB builder image used when a buildpack build supplies
+// none (the control plane normally resolves and sends one). Overridable via
+// MIABI_RUNNER_DEFAULT_BUILDER.
+const defaultBuilder = "paketobuildpacks/builder-jammy-base"
+
+// resolveBuildMethod decides how a build step builds. No build config keeps the
+// historical Dockerfile behavior; an explicit method is honored; "auto"/"" (with
+// a config present) inspects the tree — a root Dockerfile selects Dockerfile,
+// otherwise Cloud Native Buildpacks.
+func resolveBuildMethod(dir string, cfg *proto.BuildConfig) string {
+	if cfg == nil {
+		return "dockerfile"
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Method)) {
+	case "dockerfile":
+		return "dockerfile"
+	case "buildpack":
+		return "buildpack"
+	default: // "auto" or ""
+		if hasFile(dir, dockerfilePath(cfg)) {
+			return "dockerfile"
+		}
+		return "buildpack"
+	}
+}
+
+// dockerfilePath is the configured Dockerfile name, defaulting to "Dockerfile".
+func dockerfilePath(cfg *proto.BuildConfig) string {
+	if cfg != nil && strings.TrimSpace(cfg.Dockerfile) != "" {
+		return cfg.Dockerfile
+	}
+	return "Dockerfile"
+}
+
+// hasFile reports whether dir contains a regular file named name.
+func hasFile(dir, name string) bool {
+	info, err := os.Stat(filepath.Join(dir, name))
+	return err == nil && !info.IsDir()
+}
+
+// packArgs assembles the `pack build` argv for a buildpack build. Env keys are
+// sorted for a deterministic, testable argv.
+func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
+	args := []string{
+		"build", tag,
+		"--path", ".",
+		"--builder", builder,
+		// inherit: use the runner's Docker host; trust-builder: skip the prompt for
+		// a known builder; if-not-present: reuse a cached builder image.
+		"--docker-host", "inherit",
+		"--trust-builder",
+		"--pull-policy", "if-not-present",
+	}
+	if cfg == nil {
+		return args
+	}
+	for _, bp := range cfg.Buildpacks {
+		if strings.TrimSpace(bp) != "" {
+			args = append(args, "--buildpack", bp)
+		}
+	}
+	keys := make([]string, 0, len(cfg.BuildEnv))
+	for k := range cfg.BuildEnv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--env", k+"="+cfg.BuildEnv[k])
+	}
+	return args
+}
 
 // commander runs external commands; abstracted so the executors are unit-testable
 // without a real docker/buildkit/git.

@@ -77,7 +77,7 @@ func (r *buildkitJobRun) Close() { _ = os.RemoveAll(r.workdir) }
 func (r *buildkitJobRun) Step(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	switch step.Uses {
 	case "build":
-		return r.build(ctx, log)
+		return r.build(ctx, step, log)
 	case "deploy":
 		log("deploy handled by the control plane (deploy-by-digest)")
 		return StepResult{}, nil
@@ -87,10 +87,14 @@ func (r *buildkitJobRun) Step(ctx context.Context, step proto.StepSpec, log func
 }
 
 // build runs a rootless BuildKit build that pushes the image and writes a
-// metadata file, from which the pushed digest is read.
-func (r *buildkitJobRun) build(ctx context.Context, log func(string)) (StepResult, error) {
+// metadata file, from which the pushed digest is read. BuildKit is daemonless
+// and Dockerfile-only here; a buildpack build needs the docker backend.
+func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	if r.job.Repository == "" {
 		return StepResult{}, errors.New("build step requires MIABI_IMAGE_REPOSITORY (no push target)")
+	}
+	if resolveBuildMethod(r.workdir, step.Build) == "buildpack" {
+		return StepResult{}, errors.New("buildpack builds require a docker-backed runner (MIABI_RUNNER_BUILDER=docker); the rootless buildkit backend builds Dockerfiles only")
 	}
 	ref := r.job.Repository + ":" + buildTag(r.job)
 	meta := filepath.Join(r.workdir, ".miabi-build-metadata.json")
@@ -100,7 +104,7 @@ func (r *buildkitJobRun) build(ctx context.Context, log func(string)) (StepResul
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + r.workdir,
 		"--local", "dockerfile=" + r.workdir,
-		"--opt", "filename=Dockerfile",
+		"--opt", "filename=" + dockerfilePath(step.Build),
 		"--output", fmt.Sprintf("type=image,name=%s,push=true", ref),
 		"--metadata-file", meta,
 	}

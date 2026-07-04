@@ -23,14 +23,20 @@ import (
 // (The rootless BuildKit/Kaniko backend is a drop-in replacement behind the
 // Executor interface — this uses the runner's OWN daemon, never a hosting node.)
 type dockerExecutor struct {
-	cmd      commander
-	docker   string // docker binary
-	git      string // git binary
-	workRoot string // parent dir for per-job workspaces
+	cmd            commander
+	docker         string // docker binary
+	pack           string // pack (Cloud Native Buildpacks) binary
+	git            string // git binary
+	workRoot       string // parent dir for per-job workspaces
+	defaultBuilder string // CNB builder used when a buildpack build supplies none
 }
 
 func newDockerExecutor() *dockerExecutor {
-	return &dockerExecutor{cmd: execCommander{}, docker: "docker", git: "git", workRoot: os.TempDir()}
+	builder := os.Getenv("MIABI_RUNNER_DEFAULT_BUILDER")
+	if builder == "" {
+		builder = defaultBuilder
+	}
+	return &dockerExecutor{cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: os.TempDir(), defaultBuilder: builder}
 }
 
 // Begin creates the job workspace, checks out the source at the job's commit (if
@@ -90,19 +96,43 @@ func (r *dockerJobRun) Step(ctx context.Context, step proto.StepSpec, log func(s
 	}
 }
 
-// build builds the workspace Dockerfile, pushes it, and returns the pushed
-// digest so the deploy step (and provenance) can reference it by digest.
-func (r *dockerJobRun) build(ctx context.Context, _ proto.StepSpec, log func(string)) (StepResult, error) {
+// build turns the checked-out source into an image — a Dockerfile build or a
+// Cloud Native Buildpacks build (per the step's BuildConfig, auto-detected when
+// unset) — pushes it, and returns the pushed digest so the deploy step (and
+// provenance) can reference it by digest.
+func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	if r.job.Repository == "" {
 		return StepResult{}, errors.New("build step requires MIABI_IMAGE_REPOSITORY (no push target)")
 	}
 	tag := r.job.Repository + ":" + buildTag(r.job)
 
-	log("building " + tag)
-	if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.docker, "build", "-t", tag, "."); err != nil {
-		return StepResult{}, fmt.Errorf("docker build: %w", err)
-	} else if code != 0 {
-		return StepResult{Exit: code}, nil
+	switch resolveBuildMethod(r.workdir, step.Build) {
+	case "buildpack":
+		builder := ""
+		if step.Build != nil {
+			builder = strings.TrimSpace(step.Build.Builder)
+		}
+		if builder == "" {
+			builder = r.e.defaultBuilder
+		}
+		log(fmt.Sprintf("building %s with buildpacks (builder %s)", tag, builder))
+		if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.pack, packArgs(tag, builder, step.Build)...); err != nil {
+			return StepResult{}, fmt.Errorf("pack build: %w", err)
+		} else if code != 0 {
+			return StepResult{Exit: code}, nil
+		}
+	default: // dockerfile
+		args := []string{"build", "-t", tag}
+		if df := dockerfilePath(step.Build); df != "Dockerfile" {
+			args = append(args, "-f", df)
+		}
+		args = append(args, ".")
+		log("building " + tag)
+		if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.docker, args...); err != nil {
+			return StepResult{}, fmt.Errorf("docker build: %w", err)
+		} else if code != 0 {
+			return StepResult{Exit: code}, nil
+		}
 	}
 
 	log("pushing " + tag)
