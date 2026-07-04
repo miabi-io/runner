@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,7 +65,7 @@ func (f *fakeCommander) called(substr string) bool {
 
 func newTestExecutor(t *testing.T, cmd commander) *dockerExecutor {
 	t.Helper()
-	return &dockerExecutor{cmd: cmd, docker: "docker", git: "git", workRoot: t.TempDir()}
+	return &dockerExecutor{cmd: cmd, docker: "docker", pack: "pack", git: "git", workRoot: t.TempDir(), defaultBuilder: defaultBuilder}
 }
 
 func TestBeginCheckoutAndLogin(t *testing.T) {
@@ -115,6 +117,62 @@ func TestBuildStepPushesByDigest(t *testing.T) {
 	}
 	if !fc.called("docker push reg.example.com/ws-42/web:abcdef123456") {
 		t.Errorf("push command missing: %v", fc.calls)
+	}
+}
+
+func TestBuildStepBuildpack(t *testing.T) {
+	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+	e := newTestExecutor(t, fc)
+	job := proto.JobSpec{RunID: 7, Repository: "reg.example.com/ws-42/web", Commit: "abcdef1234567890"}
+	run, err := e.Begin(context.Background(), job, func(string) {})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer run.Close()
+
+	step := proto.StepSpec{Name: "build", Uses: "build", Build: &proto.BuildConfig{
+		Method:     "buildpack",
+		Builder:    "paketobuildpacks/builder-jammy-base",
+		Buildpacks: []string{"paketo-buildpacks/nodejs"},
+		BuildEnv:   map[string]string{"BP_NODE_VERSION": "20"},
+	}}
+	res, err := run.Step(context.Background(), step, func(string) {})
+	if err != nil {
+		t.Fatalf("build step: %v", err)
+	}
+	if res.Digest != "sha256:cafebabe" {
+		t.Errorf("digest = %q, want sha256:cafebabe", res.Digest)
+	}
+	if !fc.called("pack build reg.example.com/ws-42/web:abcdef123456 --path . --builder paketobuildpacks/builder-jammy-base") {
+		t.Errorf("pack build command wrong: %v", fc.calls)
+	}
+	if !fc.called("--buildpack paketo-buildpacks/nodejs") || !fc.called("--env BP_NODE_VERSION=20") {
+		t.Errorf("buildpack/env flags missing: %v", fc.calls)
+	}
+	if fc.called("docker build") {
+		t.Error("buildpack build must not invoke docker build")
+	}
+	if !fc.called("docker push reg.example.com/ws-42/web:abcdef123456") {
+		t.Errorf("push missing after buildpack build: %v", fc.calls)
+	}
+}
+
+func TestResolveBuildMethod(t *testing.T) {
+	dir := t.TempDir()
+	if got := resolveBuildMethod(dir, nil); got != "dockerfile" {
+		t.Errorf("nil config = %q, want dockerfile (historical default)", got)
+	}
+	if got := resolveBuildMethod(dir, &proto.BuildConfig{Method: "buildpack"}); got != "buildpack" {
+		t.Errorf("explicit buildpack = %q", got)
+	}
+	if got := resolveBuildMethod(dir, &proto.BuildConfig{Method: "auto"}); got != "buildpack" {
+		t.Errorf("auto with no Dockerfile = %q, want buildpack", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveBuildMethod(dir, &proto.BuildConfig{Method: "auto"}); got != "dockerfile" {
+		t.Errorf("auto with a Dockerfile = %q, want dockerfile", got)
 	}
 }
 
