@@ -111,12 +111,17 @@ func (r *dockerJobRun) Close() {
 // authCmd wraps a docker/pack invocation so it uses this job's private
 // DOCKER_CONFIG — its own registry credentials in an isolated dir — instead of a
 // shared ~/.docker/config.json that concurrent jobs on the same daemon would
-// clobber. With no per-job credential (anonymous build) the command is unchanged.
-func (r *dockerJobRun) authCmd(bin string, args ...string) (string, []string) {
-	if r.cfgDir == "" {
+// clobber. extraEnv adds command-specific vars (e.g. DOCKER_BUILDKIT=1 for the
+// build). With no per-job credential and no extra env the command is unchanged.
+func (r *dockerJobRun) authCmd(extraEnv []string, bin string, args ...string) (string, []string) {
+	prefix := append([]string{}, extraEnv...)
+	if r.cfgDir != "" {
+		prefix = append(prefix, "DOCKER_CONFIG="+r.cfgDir)
+	}
+	if len(prefix) == 0 {
 		return bin, args
 	}
-	return "env", append([]string{"DOCKER_CONFIG=" + r.cfgDir, bin}, args...)
+	return "env", append(append(prefix, bin), args...)
 }
 
 func (r *dockerJobRun) Step(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
@@ -153,7 +158,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 			builder = r.e.defaultBuilder
 		}
 		log(fmt.Sprintf("building %s with buildpacks (builder %s)", tag, builder))
-		name, args := r.authCmd(r.e.pack, packArgs(tag, builder, step.Build)...)
+		name, args := r.authCmd(nil, r.e.pack, packArgs(tag, builder, step.Build)...)
 		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("pack build: %w", err)
 		} else if code != 0 {
@@ -166,7 +171,10 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		}
 		buildArgs = append(buildArgs, ".")
 		log("building " + tag)
-		name, args := r.authCmd(r.e.docker, buildArgs...)
+		// Build with BuildKit (the daemon's integrated builder) rather than the
+		// deprecated legacy builder — faster, cache-aware, and silences the "legacy
+		// builder is deprecated" warning without needing the buildx CLI plugin.
+		name, args := r.authCmd([]string{"DOCKER_BUILDKIT=1"}, r.e.docker, buildArgs...)
 		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("docker build: %w", err)
 		} else if code != 0 {
@@ -175,7 +183,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 	}
 
 	log("pushing " + tag)
-	name, args := r.authCmd(r.e.docker, "push", tag)
+	name, args := r.authCmd(nil, r.e.docker, "push", tag)
 	if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("docker push: %w", err)
 	} else if code != 0 {
@@ -203,7 +211,7 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	args = append(args, step.Image)
 	args = append(args, step.Run...)
 
-	name, cargs := r.authCmd(r.e.docker, args...)
+	name, cargs := r.authCmd(nil, r.e.docker, args...)
 	code, err := r.e.cmd.run(ctx, "", log, name, cargs...)
 	if err != nil {
 		return StepResult{}, err
@@ -223,17 +231,16 @@ func (r *dockerJobRun) digest(ctx context.Context, tag string) (string, error) {
 	return "", fmt.Errorf("no pushed digest for %s (got %q)", tag, out)
 }
 
-// buildTag derives a deterministic tag for the built image from the commit
-// (preferred, short) or the run number.
+// buildTag names the built image: run-<number> for a pipeline run, else the
+// deploy id (RunID carries the deployment id for a deploy build), else latest.
+// The pushed digest is the real identity the control plane deploys by; the tag is
+// a human-readable, unique-per-build label alongside <workspace>/<app>.
 func buildTag(job proto.JobSpec) string {
-	if c := job.Commit; c != "" {
-		if len(c) > 12 {
-			return c[:12]
-		}
-		return c
-	}
 	if job.RunNumber > 0 {
 		return "run-" + strconv.Itoa(job.RunNumber)
+	}
+	if job.RunID > 0 {
+		return strconv.FormatUint(uint64(job.RunID), 10)
 	}
 	return "latest"
 }
