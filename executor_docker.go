@@ -200,8 +200,14 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	for _, e := range append(append([]string{}, r.job.Env...), step.Env...) {
 		args = append(args, "-e", e)
 	}
-	args = append(args, step.Image)
-	args = append(args, step.Run...)
+	// A `run:` command overrides the image ENTRYPOINT. With no
+	// command the image's own entrypoint/CMD runs unchanged.
+	if len(step.Run) > 0 {
+		args = append(args, "--entrypoint", step.Run[0], step.Image)
+		args = append(args, step.Run[1:]...)
+	} else {
+		args = append(args, step.Image)
+	}
 
 	name, cargs := r.authCmd(r.e.docker, args...)
 	code, err := r.e.cmd.run(ctx, "", log, name, cargs...)

@@ -247,17 +247,37 @@ func TestContainerStepMountsWorkspace(t *testing.T) {
 	e := newTestExecutor(t, fc)
 	run, _ := e.Begin(context.Background(), proto.JobSpec{Env: []string{"FOO=bar"}}, func(string) {})
 	defer run.Close()
+	// The control plane sends Run as ["sh", "-c", "<script>"]; the runner runs it
+	// as the container entrypoint so an image's own ENTRYPOINT can't swallow it.
 	_, err := run.Step(context.Background(), proto.StepSpec{
-		Name: "test", Image: "golang:1.25", Env: []string{"CI=true"}, Run: []string{"go", "test", "./..."},
+		Name: "test", Image: "golang:1.25", Env: []string{"CI=true"}, Run: []string{"sh", "-c", "go test ./..."},
 	}, func(string) {})
 	if err != nil {
 		t.Fatalf("container step: %v", err)
 	}
-	if !fc.called("docker run --rm -w /workspace -v") || !fc.called("golang:1.25 go test ./...") {
+	if !fc.called("docker run --rm -w /workspace -v") || !fc.called("--entrypoint sh golang:1.25 -c go test ./...") {
 		t.Errorf("container run command wrong: %v", fc.calls)
 	}
 	if !fc.called("-e FOO=bar") || !fc.called("-e CI=true") {
 		t.Errorf("job + step env not injected: %v", fc.calls)
+	}
+}
+
+// A step with no run command runs the image's own entrypoint/CMD — no override.
+func TestContainerStepNoRunKeepsEntrypoint(t *testing.T) {
+	fc := &fakeCommander{}
+	e := newTestExecutor(t, fc)
+	run, _ := e.Begin(context.Background(), proto.JobSpec{}, func(string) {})
+	defer run.Close()
+	if _, err := run.Step(context.Background(), proto.StepSpec{
+		Name: "smoke", Image: "ghcr.io/acme/smoke:latest",
+	}, func(string) {}); err != nil {
+		t.Fatalf("container step: %v", err)
+	}
+	for _, c := range fc.calls {
+		if strings.Contains(c, "--entrypoint") {
+			t.Errorf("no run command should leave the entrypoint untouched: %v", fc.calls)
+		}
 	}
 }
 
