@@ -21,15 +21,25 @@ Register a runner in the Miabi UI (**Settings → Runners → Add runner**, or
 docker run -d --name miabi-runner \
   -e MIABI_CONTROL_URL=https://panel.example.com \
   -e MIABI_RUNNER_TOKEN=mbr_xxxxxxxx \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /srv/miabi/builds:/srv/miabi/builds \
+  -e MIABI_RUNNER_BUILDS_DIR=/srv/miabi/builds \
   miabi/runner:latest
 ```
+
+The default `docker` backend builds and runs steps against a Docker daemon, so
+the container needs the **host Docker socket** bind above (this is the runner's
+*own* daemon — it is never exposed to the control plane). The builds-dir volume
+is mounted at the same path inside and out so the per-step `-v` mounts resolve on
+the host daemon (see `MIABI_RUNNER_BUILDS_DIR` below). Using the rootless
+`buildkit` backend (`-e MIABI_RUNNER_BUILDER=buildkit`) needs neither.
 
 Or as a binary: `MIABI_CONTROL_URL=… MIABI_RUNNER_TOKEN=… ./miabi-runner`.
 
 ### CI/CD pipelines in Miabi
 
 <p align="center">
-  <img src="pipelines.png" alt="CI/CD pipelines — build, test, and deploy runs on the internal runner with live per-step logs" width="900"/>
+  <img src="pipelines.png" alt="CI/CD pipelines — build, test, and deploy runs on a Miabi runner with live per-step logs" width="900"/>
 </p>
 
 ## Configuration (environment)
