@@ -36,7 +36,7 @@ func newDockerExecutor() *dockerExecutor {
 	if builder == "" {
 		builder = defaultBuilder
 	}
-	return &dockerExecutor{cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: os.TempDir(), defaultBuilder: builder}
+	return &dockerExecutor{cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: buildsDir(), defaultBuilder: builder}
 }
 
 // Begin creates the job workspace, checks out the source at the job's commit (if
@@ -53,23 +53,43 @@ func (e *dockerExecutor) Begin(ctx context.Context, job proto.JobSpec, log func(
 			return nil, err
 		}
 	}
-	if err := e.registryLogin(ctx, job, log); err != nil {
+	run := &dockerJobRun{e: e, job: job, workdir: workdir}
+	if err := e.setupRegistryAuth(job, run, log); err != nil {
 		_ = os.RemoveAll(workdir)
 		return nil, err
 	}
-	return &dockerJobRun{e: e, job: job, workdir: workdir}, nil
+	return run, nil
 }
 
-func (e *dockerExecutor) registryLogin(ctx context.Context, job proto.JobSpec, log func(string)) error {
+// setupRegistryAuth writes this job's registry credential into a private
+// DOCKER_CONFIG dir kept OUTSIDE the build context. This gives two properties:
+//
+//   - Isolation: concurrent jobs on the same docker daemon never share or clobber
+//     a global ~/.docker/config.json. A plain `docker login` writes credentials
+//     keyed by registry host, so two jobs logging into the same registry with
+//     their own workspace-scoped tokens would overwrite each other and a push
+//     could use the wrong token. Each job now authenticates only with its own.
+//   - No token leak into the image: the dir is a sibling of the workdir, not
+//     inside it, so the credential is never sent to the daemon as build context
+//     (a malicious Dockerfile can't COPY it out).
+//
+// A blank token (anonymous build) sets up nothing and commands run unwrapped.
+func (e *dockerExecutor) setupRegistryAuth(job proto.JobSpec, run *dockerJobRun, log func(string)) error {
 	env := envMap(job.Env)
 	reg, user, token := env["MIABI_REGISTRY"], env["MIABI_REGISTRY_USER"], env["MIABI_REGISTRY_TOKEN"]
 	if token == "" {
 		return nil // anonymous / no push credential
 	}
-	log("logging in to registry " + reg)
-	if err := e.cmd.loginStdin(ctx, token, e.docker, "login", reg, "-u", user, "--password-stdin"); err != nil {
-		return fmt.Errorf("registry login: %w", err)
+	cfgDir, err := os.MkdirTemp(e.workRoot, fmt.Sprintf("miabi-auth-%d-", job.RunID))
+	if err != nil {
+		return fmt.Errorf("create registry auth dir: %w", err)
 	}
+	if err := writeDockerConfig(cfgDir, reg, user, token); err != nil {
+		_ = os.RemoveAll(cfgDir)
+		return fmt.Errorf("write registry config: %w", err)
+	}
+	run.cfgDir = cfgDir
+	log("using registry " + reg + " (isolated per-job credentials)")
 	return nil
 }
 
@@ -78,9 +98,26 @@ type dockerJobRun struct {
 	e       *dockerExecutor
 	job     proto.JobSpec
 	workdir string
+	cfgDir  string // private DOCKER_CONFIG (per-job registry auth), a sibling of workdir
 }
 
-func (r *dockerJobRun) Close() { _ = os.RemoveAll(r.workdir) }
+func (r *dockerJobRun) Close() {
+	_ = os.RemoveAll(r.workdir)
+	if r.cfgDir != "" {
+		_ = os.RemoveAll(r.cfgDir)
+	}
+}
+
+// authCmd wraps a docker/pack invocation so it uses this job's private
+// DOCKER_CONFIG — its own registry credentials in an isolated dir — instead of a
+// shared ~/.docker/config.json that concurrent jobs on the same daemon would
+// clobber. With no per-job credential (anonymous build) the command is unchanged.
+func (r *dockerJobRun) authCmd(bin string, args ...string) (string, []string) {
+	if r.cfgDir == "" {
+		return bin, args
+	}
+	return "env", append([]string{"DOCKER_CONFIG=" + r.cfgDir, bin}, args...)
+}
 
 func (r *dockerJobRun) Step(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	switch step.Uses {
@@ -116,19 +153,21 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 			builder = r.e.defaultBuilder
 		}
 		log(fmt.Sprintf("building %s with buildpacks (builder %s)", tag, builder))
-		if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.pack, packArgs(tag, builder, step.Build)...); err != nil {
+		name, args := r.authCmd(r.e.pack, packArgs(tag, builder, step.Build)...)
+		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("pack build: %w", err)
 		} else if code != 0 {
 			return StepResult{Exit: code}, nil
 		}
 	default: // dockerfile
-		args := []string{"build", "-t", tag}
+		buildArgs := []string{"build", "-t", tag}
 		if df := dockerfilePath(step.Build); df != "Dockerfile" {
-			args = append(args, "-f", df)
+			buildArgs = append(buildArgs, "-f", df)
 		}
-		args = append(args, ".")
+		buildArgs = append(buildArgs, ".")
 		log("building " + tag)
-		if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.docker, args...); err != nil {
+		name, args := r.authCmd(r.e.docker, buildArgs...)
+		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("docker build: %w", err)
 		} else if code != 0 {
 			return StepResult{Exit: code}, nil
@@ -136,7 +175,8 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 	}
 
 	log("pushing " + tag)
-	if code, err := r.e.cmd.run(ctx, r.workdir, log, r.e.docker, "push", tag); err != nil {
+	name, args := r.authCmd(r.e.docker, "push", tag)
+	if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("docker push: %w", err)
 	} else if code != 0 {
 		return StepResult{Exit: code}, nil
@@ -163,7 +203,8 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	args = append(args, step.Image)
 	args = append(args, step.Run...)
 
-	code, err := r.e.cmd.run(ctx, "", log, r.e.docker, args...)
+	name, cargs := r.authCmd(r.e.docker, args...)
+	code, err := r.e.cmd.run(ctx, "", log, name, cargs...)
 	if err != nil {
 		return StepResult{}, err
 	}

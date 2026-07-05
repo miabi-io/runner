@@ -63,6 +63,11 @@ func TestBuildkitBuildPushesByDigest(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bkr.cfgDir, "config.json")); err != nil {
 		t.Errorf("registry config.json not written: %v", err)
 	}
+	// …and it lives OUTSIDE the build context (workdir is sent as --local context),
+	// so a Dockerfile can't COPY the token out.
+	if strings.HasPrefix(bkr.cfgDir, bkr.workdir) {
+		t.Errorf("auth dir %q must not be inside the build context %q", bkr.cfgDir, bkr.workdir)
+	}
 }
 
 // Container steps are unsupported on the buildkit backend (build-only).

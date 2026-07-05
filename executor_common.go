@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jkaninda/logger"
 	"github.com/miabi-io/runner/proto"
 )
 
@@ -24,6 +25,19 @@ import (
 // none (the control plane normally resolves and sends one). Overridable via
 // MIABI_RUNNER_DEFAULT_BUILDER.
 const defaultBuilder = "paketobuildpacks/builder-jammy-base"
+
+// buildsDir is the parent directory for per-job workspaces
+func buildsDir() string {
+	dir := strings.TrimSpace(os.Getenv("MIABI_RUNNER_BUILDS_DIR"))
+	if dir == "" {
+		return os.TempDir()
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		logger.Warn("MIABI_RUNNER_BUILDS_DIR unusable, falling back to temp dir", "dir", dir, "error", err)
+		return os.TempDir()
+	}
+	return dir
+}
 
 // resolveBuildMethod decides how a build step builds. No build config keeps the
 // historical Dockerfile behavior; an explicit method is honored; "auto"/"" (with

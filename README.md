@@ -35,6 +35,7 @@ Or as a binary: `MIABI_CONTROL_URL=… MIABI_RUNNER_TOKEN=… ./miabi-runner`.
 | `MIABI_RUNNER_INSECURE_SKIP_VERIFY` | no | Skip TLS verification of the control plane (dev only; default false) |
 | `MIABI_RUNNER_BUILDER` | no | Build backend: `docker` (default; also runs container steps and **buildpack** builds) or `buildkit` (rootless/daemonless, Dockerfile-only, no docker.sock) |
 | `MIABI_RUNNER_DEFAULT_BUILDER` | no | CNB builder image used for buildpack builds when the job supplies none (default `paketobuildpacks/builder-jammy-base`) |
+| `MIABI_RUNNER_BUILDS_DIR` | no | Parent dir for per-job workspaces (checkout + build context). Default: OS temp dir. Prefer a real sized volume over `/tmp` (tmpfs/RAM or ephemeral overlay). **In a containerized docker-backend runner, mount a host volume here at the _same_ path** (e.g. `-v /srv/miabi/builds:/srv/miabi/builds -e MIABI_RUNNER_BUILDS_DIR=/srv/miabi/builds`) so container/buildpack step `-v` mounts resolve on the host daemon. |
 | `MIABI_DEV_MODE` | no | Debug logging (default false) |
 
 ## Builds
