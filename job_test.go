@@ -129,3 +129,43 @@ func TestRunJobNonZeroExitFails(t *testing.T) {
 		t.Fatalf("final frame = %+v, want done/failed on non-zero exit", last)
 	}
 }
+
+// A continue-on-error step that fails is reported failed, but the run keeps going
+// and still succeeds — whether the step exited non-zero or errored outright.
+func TestRunJobContinueOnError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		exec fakeExecutor
+	}{
+		{"non-zero exit", fakeExecutor{results: map[int]StepResult{0: {Exit: 1}}}},
+		{"executor error", fakeExecutor{errs: map[int]error{0: errors.New("boom")}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := proto.JobSpec{RunID: 4, Steps: []proto.StepSpec{
+				{Ordinal: 0, Name: "scan", ContinueOnError: true},
+				{Ordinal: 1, Name: "deploy", Uses: "deploy"},
+			}}
+			frames := drive(t, job, tc.exec)
+
+			last := frames[len(frames)-1]
+			if last.Type != proto.FrameDone || last.Status != statusSucceeded {
+				t.Fatalf("final frame = %+v, want done/succeeded despite the allowed failure", last)
+			}
+			var step0Failed, step1Ran bool
+			for _, f := range frames {
+				if f.Step == 0 && f.Type == proto.FrameStep && f.Status == statusFailed {
+					step0Failed = true
+				}
+				if f.Step == 1 && f.Type == proto.FrameStep {
+					step1Ran = true
+				}
+			}
+			if !step0Failed {
+				t.Error("the allowed-failure step should still be reported failed")
+			}
+			if !step1Ran {
+				t.Error("the next step should run after a continue-on-error failure")
+			}
+		})
+	}
+}
