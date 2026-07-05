@@ -54,8 +54,19 @@ func (e *dockerExecutor) Begin(ctx context.Context, job proto.JobSpec, log func(
 		}
 	}
 	run := &dockerJobRun{e: e, job: job, workdir: workdir}
-	if err := e.setupRegistryAuth(job, run, log); err != nil {
+	// Per-job env file ($MIABI_ENV) for step-to-step variable exports. A sibling
+	// of the workspace (not inside it) so it's never part of a build context, and
+	// world-writable so a container step running as any user can append to it.
+	envFile, err := os.CreateTemp(e.workRoot, fmt.Sprintf("miabi-env-%d-*.env", job.RunID))
+	if err != nil {
 		_ = os.RemoveAll(workdir)
+		return nil, fmt.Errorf("create env file: %w", err)
+	}
+	_ = envFile.Close()
+	_ = os.Chmod(envFile.Name(), 0o666)
+	run.envFile = envFile.Name()
+	if err := e.setupRegistryAuth(job, run, log); err != nil {
+		run.Close()
 		return nil, err
 	}
 	return run, nil
@@ -99,6 +110,8 @@ type dockerJobRun struct {
 	job     proto.JobSpec
 	workdir string
 	cfgDir  string // private DOCKER_CONFIG (per-job registry auth), a sibling of workdir
+	// envFile is a per-job KEY=VALUE file, exposed to steps as $MIABI_ENV.
+	envFile string
 }
 
 func (r *dockerJobRun) Close() {
@@ -106,6 +119,47 @@ func (r *dockerJobRun) Close() {
 	if r.cfgDir != "" {
 		_ = os.RemoveAll(r.cfgDir)
 	}
+	if r.envFile != "" {
+		_ = os.Remove(r.envFile)
+	}
+}
+
+// exportEnv appends a KEY=VALUE line to the job's $MIABI_ENV file so every later
+// step sees it. Used by built-in steps (e.g. the build step publishing
+// MIABI_IMAGE) exactly as a user step would via `echo K=V >> $MIABI_ENV`.
+func (r *dockerJobRun) exportEnv(key, value string) {
+	if r.envFile == "" {
+		return
+	}
+	f, err := os.OpenFile(r.envFile, os.O_APPEND|os.O_WRONLY, 0o666)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = fmt.Fprintf(f, "%s=%s\n", key, value)
+}
+
+// exportedEnv reads the vars steps have written to $MIABI_ENV so far, as
+// KEY=VALUE strings ready to pass to `docker run -e`. Blank lines and lines
+// without '=' are ignored; later assignments to the same key win (docker keeps
+// the last -e for a given key).
+func (r *dockerJobRun) exportedEnv() []string {
+	if r.envFile == "" {
+		return nil
+	}
+	data, err := os.ReadFile(r.envFile)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "=") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // authCmd wraps a docker/pack invocation so it uses this job's private
@@ -187,6 +241,12 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		return StepResult{}, err
 	}
 	log("pushed digest " + digest)
+	// Publish the produced reference to later steps via $MIABI_ENV — the same
+	// generic channel a user step uses. MIABI_IMAGE is the tag ref (readable);
+	// MIABI_IMAGE_DIGEST the immutable repo@sha256 form (`digest` is only the
+	// sha256:… hash, so rebuild the pullable repo@digest).
+	r.exportEnv("MIABI_IMAGE", tag)
+	r.exportEnv("MIABI_IMAGE_DIGEST", r.job.Repository+"@"+digest)
 	return StepResult{Digest: digest}, nil
 }
 
@@ -197,8 +257,17 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 		return StepResult{}, fmt.Errorf("step %q has no image to run", step.Name)
 	}
 	args := []string{"run", "--rm", "-w", "/workspace", "-v", r.workdir + ":/workspace"}
-	for _, e := range append(append([]string{}, r.job.Env...), step.Env...) {
+
+	stepEnv := append([]string{}, r.job.Env...)
+	stepEnv = append(stepEnv, r.exportedEnv()...)
+	stepEnv = append(stepEnv, step.Env...)
+	for _, e := range stepEnv {
 		args = append(args, "-e", e)
+	}
+	// Mount the shared env file and point $MIABI_ENV at it so this step can export
+	// its own vars to later steps (`echo KEY=VALUE >> $MIABI_ENV`).
+	if r.envFile != "" {
+		args = append(args, "-v", r.envFile+":/miabi/env", "-e", "MIABI_ENV=/miabi/env")
 	}
 	// A `run:` command overrides the image ENTRYPOINT. With no
 	// command the image's own entrypoint/CMD runs unchanged.

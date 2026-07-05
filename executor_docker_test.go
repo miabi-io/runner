@@ -263,6 +263,56 @@ func TestContainerStepMountsWorkspace(t *testing.T) {
 	}
 }
 
+// After a build step, a later container step sees the produced image reference
+// as MIABI_IMAGE / MIABI_IMAGE_DIGEST (so it can scan/test the built artifact).
+func TestContainerStepSeesBuiltImage(t *testing.T) {
+	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+	e := newTestExecutor(t, fc)
+	job := proto.JobSpec{RunNumber: 57, Repository: "reg.example.com/ws-42/web"}
+	run, _ := e.Begin(context.Background(), job, func(string) {})
+	defer run.Close()
+
+	if _, err := run.Step(context.Background(), proto.StepSpec{Name: "build", Uses: "build"}, func(string) {}); err != nil {
+		t.Fatalf("build step: %v", err)
+	}
+	if _, err := run.Step(context.Background(), proto.StepSpec{
+		Name: "scan", Image: "aquasec/trivy:latest",
+		Run: []string{"sh", "-c", "trivy image $MIABI_IMAGE"},
+	}, func(string) {}); err != nil {
+		t.Fatalf("scan step: %v", err)
+	}
+	if !fc.called("-e MIABI_IMAGE=reg.example.com/ws-42/web:run-57") {
+		t.Errorf("MIABI_IMAGE not exported to the scan step: %v", fc.calls)
+	}
+	if !fc.called("-e MIABI_IMAGE_DIGEST=reg.example.com/ws-42/web@sha256:cafebabe") {
+		t.Errorf("MIABI_IMAGE_DIGEST not exported: %v", fc.calls)
+	}
+}
+
+// Any variable a step writes to $MIABI_ENV is visible to later steps, and every
+// container step gets the env file mounted so it can export more — the generic
+// mechanism the build step's MIABI_IMAGE also rides on, with no per-var runner code.
+func TestStepEnvExportPropagates(t *testing.T) {
+	fc := &fakeCommander{}
+	e := newTestExecutor(t, fc)
+	run, _ := e.Begin(context.Background(), proto.JobSpec{}, func(string) {})
+	defer run.Close()
+	// Stand in for an earlier step running `echo VERSION=1.2.3 >> $MIABI_ENV`.
+	run.(*dockerJobRun).exportEnv("VERSION", "1.2.3")
+
+	if _, err := run.Step(context.Background(), proto.StepSpec{
+		Name: "use", Image: "alpine", Run: []string{"sh", "-c", "echo $VERSION"},
+	}, func(string) {}); err != nil {
+		t.Fatalf("step: %v", err)
+	}
+	if !fc.called("-e VERSION=1.2.3") {
+		t.Errorf("exported var not propagated to the next step: %v", fc.calls)
+	}
+	if !fc.called(":/miabi/env") || !fc.called("-e MIABI_ENV=/miabi/env") {
+		t.Errorf("$MIABI_ENV file not mounted into the step: %v", fc.calls)
+	}
+}
+
 // A step with no run command runs the image's own entrypoint/CMD — no override.
 func TestContainerStepNoRunKeepsEntrypoint(t *testing.T) {
 	fc := &fakeCommander{}
