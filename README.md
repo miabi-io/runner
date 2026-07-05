@@ -26,6 +26,12 @@ docker run -d --name miabi-runner \
 
 Or as a binary: `MIABI_CONTROL_URL=… MIABI_RUNNER_TOKEN=… ./miabi-runner`.
 
+### CI/CD pipelines in Miabi
+
+<p align="center">
+  <img src="pipelines.png" alt="CI/CD pipelines — build, test, and deploy runs on the internal runner with live per-step logs" width="900"/>
+</p>
+
 ## Configuration (environment)
 
 | Variable | Required | Meaning |
