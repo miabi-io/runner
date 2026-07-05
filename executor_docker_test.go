@@ -31,8 +31,26 @@ type fakeCommander struct {
 func (f *fakeCommander) run(_ context.Context, _ string, log func(string), name string, args ...string) (int, error) {
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	log(name + " output")
-	if name == "docker" && len(args) > 0 {
-		switch args[0] {
+	// Unwrap an `env KEY=VAL … <bin> <sub> …` prefix (per-job DOCKER_CONFIG /
+	// DOCKER_BUILDKIT) to the real command, so exit-code scripting still matches.
+	bin, sub := name, ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if name == "env" {
+		i := 0
+		for i < len(args) && strings.Contains(args[i], "=") {
+			i++
+		}
+		if i < len(args) {
+			bin = args[i]
+			if i+1 < len(args) {
+				sub = args[i+1]
+			}
+		}
+	}
+	if bin == "docker" {
+		switch sub {
 		case "build":
 			return f.buildExit, nil
 		case "push":
@@ -133,11 +151,11 @@ func TestBuildPushUsePerJobDockerConfig(t *testing.T) {
 	if _, err := run.Step(context.Background(), proto.StepSpec{Name: "build", Uses: "build"}, func(string) {}); err != nil {
 		t.Fatalf("build step: %v", err)
 	}
-	wantBuild := "env DOCKER_CONFIG=" + dr.cfgDir + " docker build -t reg.example.com/ws-42/web:abcdef123456 ."
+	wantBuild := "env DOCKER_BUILDKIT=1 DOCKER_CONFIG=" + dr.cfgDir + " docker build -t reg.example.com/ws-42/web:8 ."
 	if !fc.called(wantBuild) {
 		t.Errorf("build not wrapped with per-job DOCKER_CONFIG: %v", fc.calls)
 	}
-	wantPush := "env DOCKER_CONFIG=" + dr.cfgDir + " docker push reg.example.com/ws-42/web:abcdef123456"
+	wantPush := "env DOCKER_CONFIG=" + dr.cfgDir + " docker push reg.example.com/ws-42/web:8"
 	if !fc.called(wantPush) {
 		t.Errorf("push not wrapped with per-job DOCKER_CONFIG: %v", fc.calls)
 	}
@@ -160,11 +178,11 @@ func TestBuildStepPushesByDigest(t *testing.T) {
 	if res.Digest != "sha256:cafebabe" {
 		t.Errorf("digest = %q, want sha256:cafebabe", res.Digest)
 	}
-	// Tag derives from the short commit; build then push then inspect.
-	if !fc.called("docker build -t reg.example.com/ws-42/web:abcdef123456 .") {
+	// Tag is the deploy id (RunID) for a deploy build; build then push then inspect.
+	if !fc.called("docker build -t reg.example.com/ws-42/web:6 .") {
 		t.Errorf("build command wrong: %v", fc.calls)
 	}
-	if !fc.called("docker push reg.example.com/ws-42/web:abcdef123456") {
+	if !fc.called("docker push reg.example.com/ws-42/web:6") {
 		t.Errorf("push command missing: %v", fc.calls)
 	}
 }
@@ -192,7 +210,7 @@ func TestBuildStepBuildpack(t *testing.T) {
 	if res.Digest != "sha256:cafebabe" {
 		t.Errorf("digest = %q, want sha256:cafebabe", res.Digest)
 	}
-	if !fc.called("pack build reg.example.com/ws-42/web:abcdef123456 --path . --builder paketobuildpacks/builder-jammy-base") {
+	if !fc.called("pack build reg.example.com/ws-42/web:7 --path . --builder paketobuildpacks/builder-jammy-base") {
 		t.Errorf("pack build command wrong: %v", fc.calls)
 	}
 	if !fc.called("--buildpack paketo-buildpacks/nodejs") || !fc.called("--env BP_NODE_VERSION=20") {
@@ -201,7 +219,7 @@ func TestBuildStepBuildpack(t *testing.T) {
 	if fc.called("docker build") {
 		t.Error("buildpack build must not invoke docker build")
 	}
-	if !fc.called("docker push reg.example.com/ws-42/web:abcdef123456") {
+	if !fc.called("docker push reg.example.com/ws-42/web:7") {
 		t.Errorf("push missing after buildpack build: %v", fc.calls)
 	}
 }

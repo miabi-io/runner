@@ -47,12 +47,12 @@ func TestBuildkitBuildPushesByDigest(t *testing.T) {
 	if res.Digest != "sha256:cafebabe" {
 		t.Errorf("digest = %q", res.Digest)
 	}
-	// buildctl invoked with a push output, the short-commit tag, and the docker
-	// config env for auth.
+	// buildctl invoked with a push output, the deploy-id (RunID) tag, and the
+	// docker config env for auth.
 	if !fc.called("buildctl-daemonless.sh build") {
 		t.Errorf("buildctl not invoked: %v", fc.calls)
 	}
-	if !fc.called("type=image,name=reg.example.com/ws_42/app-1:abcdef123456,push=true") {
+	if !fc.called("type=image,name=reg.example.com/ws_42/app-1:6,push=true") {
 		t.Errorf("push output ref wrong: %v", fc.calls)
 	}
 	if !fc.called("DOCKER_CONFIG=") {
