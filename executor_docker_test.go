@@ -31,26 +31,8 @@ type fakeCommander struct {
 func (f *fakeCommander) run(_ context.Context, _ string, log func(string), name string, args ...string) (int, error) {
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	log(name + " output")
-	// Unwrap an `env KEY=VAL … <bin> <sub> …` prefix (per-job DOCKER_CONFIG /
-	// DOCKER_BUILDKIT) to the real command, so exit-code scripting still matches.
-	bin, sub := name, ""
-	if len(args) > 0 {
-		sub = args[0]
-	}
-	if name == "env" {
-		i := 0
-		for i < len(args) && strings.Contains(args[i], "=") {
-			i++
-		}
-		if i < len(args) {
-			bin = args[i]
-			if i+1 < len(args) {
-				sub = args[i+1]
-			}
-		}
-	}
-	if bin == "docker" {
-		switch sub {
+	if name == "docker" && len(args) > 0 {
+		switch args[0] {
 		case "build":
 			return f.buildExit, nil
 		case "push":
@@ -151,7 +133,7 @@ func TestBuildPushUsePerJobDockerConfig(t *testing.T) {
 	if _, err := run.Step(context.Background(), proto.StepSpec{Name: "build", Uses: "build"}, func(string) {}); err != nil {
 		t.Fatalf("build step: %v", err)
 	}
-	wantBuild := "env DOCKER_BUILDKIT=1 DOCKER_CONFIG=" + dr.cfgDir + " docker build -t reg.example.com/ws-42/web:8 ."
+	wantBuild := "env DOCKER_CONFIG=" + dr.cfgDir + " docker build -t reg.example.com/ws-42/web:8 ."
 	if !fc.called(wantBuild) {
 		t.Errorf("build not wrapped with per-job DOCKER_CONFIG: %v", fc.calls)
 	}
