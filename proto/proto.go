@@ -52,6 +52,9 @@ type StepSpec struct {
 	Image   string   `json:"image,omitempty"` // container image for a custom step
 	Env     []string `json:"env,omitempty"`   // KEY=VALUE, step-scoped
 	Run     []string `json:"run,omitempty"`   // command for a container step
+	// ContinueOnError keeps the run going when this step fails (the step is still
+	// reported failed, the run still succeeds)
+	ContinueOnError bool `json:"continue_on_error,omitempty"`
 	// Build configures a build step (Uses=="build"): how to turn the checked-out
 	// source into an image. Nil (or an empty Method) means auto-detect — a root
 	// Dockerfile selects a Dockerfile build, otherwise Cloud Native Buildpacks.

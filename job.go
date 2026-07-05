@@ -61,19 +61,29 @@ func runJob(ctx context.Context, stream io.ReadWriter, exec Executor) error {
 		res, runErr := run.Step(ctx, step, func(line string) {
 			_ = fw.Log(step.Ordinal, line)
 		})
-		if runErr != nil {
-			_ = fw.Step(step.Ordinal, statusFailed)
-			_ = fw.Err(runErr.Error())
-			_ = fw.Done(statusFailed)
-			return runErr
-		}
 		if res.Digest != "" {
 			_ = fw.Result(step.Ordinal, res.Digest, res.Exit)
 		}
-		if res.Exit != 0 {
+		// A step fails when the runner couldn't execute it (runErr) or it exited
+		// non-zero. continue-on-error keeps the run going: the step is still marked
+		// failed, but the next step runs and the run can still succeed.
+		if runErr != nil || res.Exit != 0 {
 			_ = fw.Step(step.Ordinal, statusFailed)
+			if step.ContinueOnError {
+				note := "step failed"
+				if runErr != nil {
+					note += ": " + runErr.Error()
+				}
+				_ = fw.Log(step.Ordinal, note+" — continue-on-error is set, continuing")
+				continue
+			}
+			if runErr != nil {
+				_ = fw.Err(runErr.Error())
+				_ = fw.Done(statusFailed)
+				return runErr
+			}
 			_ = fw.Done(statusFailed)
-			return nil // a failed step is a completed (failed) run, not a runner error
+			return nil
 		}
 		_ = fw.Step(step.Ordinal, statusSucceeded)
 	}
