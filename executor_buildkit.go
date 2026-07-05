@@ -35,7 +35,7 @@ func newBuildkitExecutor() *buildkitExecutor {
 		cmd:        execCommander{},
 		buildctl:   "buildctl-daemonless.sh",
 		git:        "git",
-		workRoot:   os.TempDir(),
+		workRoot:   buildsDir(),
 		readDigest: readImageDigest,
 	}
 }
@@ -55,24 +55,37 @@ func (e *buildkitExecutor) Begin(ctx context.Context, job proto.JobSpec, log fun
 		}
 	}
 	env := envMap(job.Env)
-	cfgDir := filepath.Join(workdir, ".docker")
-	if err := writeDockerConfig(cfgDir, env["MIABI_REGISTRY"], env["MIABI_REGISTRY_USER"], env["MIABI_REGISTRY_TOKEN"]); err != nil {
-		_ = os.RemoveAll(workdir)
-		return nil, fmt.Errorf("write registry config: %w", err)
+	run := &buildkitJobRun{e: e, job: job, workdir: workdir}
+	if env["MIABI_REGISTRY_TOKEN"] != "" {
+
+		cfgDir, err := os.MkdirTemp(e.workRoot, fmt.Sprintf("miabi-auth-%d-", job.RunID))
+		if err != nil {
+			_ = os.RemoveAll(workdir)
+			return nil, fmt.Errorf("create registry auth dir: %w", err)
+		}
+		if err := writeDockerConfig(cfgDir, env["MIABI_REGISTRY"], env["MIABI_REGISTRY_USER"], env["MIABI_REGISTRY_TOKEN"]); err != nil {
+			_ = os.RemoveAll(cfgDir)
+			_ = os.RemoveAll(workdir)
+			return nil, fmt.Errorf("write registry config: %w", err)
+		}
+		run.cfgDir = cfgDir
 	}
-	hasAuth := env["MIABI_REGISTRY_TOKEN"] != ""
-	return &buildkitJobRun{e: e, job: job, workdir: workdir, cfgDir: cfgDir, hasAuth: hasAuth}, nil
+	return run, nil
 }
 
 type buildkitJobRun struct {
 	e       *buildkitExecutor
 	job     proto.JobSpec
 	workdir string
-	cfgDir  string
-	hasAuth bool
+	cfgDir  string // private DOCKER_CONFIG (per-job registry auth), a sibling of workdir
 }
 
-func (r *buildkitJobRun) Close() { _ = os.RemoveAll(r.workdir) }
+func (r *buildkitJobRun) Close() {
+	_ = os.RemoveAll(r.workdir)
+	if r.cfgDir != "" {
+		_ = os.RemoveAll(r.cfgDir)
+	}
+}
 
 func (r *buildkitJobRun) Step(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	switch step.Uses {
@@ -129,7 +142,7 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 // buildctlCmd prepends `env DOCKER_CONFIG=<dir>` when a registry credential was
 // written, so buildctl finds the push auth.
 func (r *buildkitJobRun) buildctlCmd(buildArgs []string) (string, []string) {
-	if r.hasAuth {
+	if r.cfgDir != "" {
 		return "env", append([]string{"DOCKER_CONFIG=" + r.cfgDir, r.e.buildctl}, buildArgs...)
 	}
 	return r.e.buildctl, buildArgs

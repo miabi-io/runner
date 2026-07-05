@@ -68,7 +68,7 @@ func newTestExecutor(t *testing.T, cmd commander) *dockerExecutor {
 	return &dockerExecutor{cmd: cmd, docker: "docker", pack: "pack", git: "git", workRoot: t.TempDir(), defaultBuilder: defaultBuilder}
 }
 
-func TestBeginCheckoutAndLogin(t *testing.T) {
+func TestBeginCheckoutAndAuth(t *testing.T) {
 	fc := &fakeCommander{}
 	e := newTestExecutor(t, fc)
 	job := proto.JobSpec{
@@ -89,8 +89,57 @@ func TestBeginCheckoutAndLogin(t *testing.T) {
 	if !fc.called("git checkout --detach abcdef1234567890") {
 		t.Errorf("expected git checkout, calls=%v", fc.calls)
 	}
-	if fc.logins != 1 {
-		t.Errorf("expected one registry login, got %d", fc.logins)
+	// No shared/global `docker login` — the credential is isolated per job instead.
+	if fc.logins != 0 {
+		t.Errorf("expected no global docker login, got %d", fc.logins)
+	}
+	dr := run.(*dockerJobRun)
+	if dr.cfgDir == "" {
+		t.Fatal("expected a per-job DOCKER_CONFIG dir")
+	}
+	// The auth dir must live OUTSIDE the build context, so a Dockerfile can't COPY
+	// the token out of the build context.
+	if strings.HasPrefix(dr.cfgDir, dr.workdir) {
+		t.Errorf("auth dir %q must not be inside the build context %q", dr.cfgDir, dr.workdir)
+	}
+	data, err := os.ReadFile(filepath.Join(dr.cfgDir, "config.json"))
+	if err != nil {
+		t.Fatalf("read per-job config.json: %v", err)
+	}
+	if !strings.Contains(string(data), "reg.example.com") {
+		t.Errorf("per-job config missing registry auth: %s", data)
+	}
+}
+
+// With a registry credential, build and push must run under the job's private
+// DOCKER_CONFIG (via an `env DOCKER_CONFIG=<dir>` prefix) so concurrent jobs never
+// share a global docker login.
+func TestBuildPushUsePerJobDockerConfig(t *testing.T) {
+	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+	e := newTestExecutor(t, fc)
+	job := proto.JobSpec{
+		RunID:      8,
+		Repository: "reg.example.com/ws-42/web",
+		Commit:     "abcdef1234567890",
+		Env:        []string{"MIABI_REGISTRY=reg.example.com", "MIABI_REGISTRY_USER=miabi-job", "MIABI_REGISTRY_TOKEN=mb_secret"},
+	}
+	run, err := e.Begin(context.Background(), job, func(string) {})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer run.Close()
+	dr := run.(*dockerJobRun)
+
+	if _, err := run.Step(context.Background(), proto.StepSpec{Name: "build", Uses: "build"}, func(string) {}); err != nil {
+		t.Fatalf("build step: %v", err)
+	}
+	wantBuild := "env DOCKER_CONFIG=" + dr.cfgDir + " docker build -t reg.example.com/ws-42/web:abcdef123456 ."
+	if !fc.called(wantBuild) {
+		t.Errorf("build not wrapped with per-job DOCKER_CONFIG: %v", fc.calls)
+	}
+	wantPush := "env DOCKER_CONFIG=" + dr.cfgDir + " docker push reg.example.com/ws-42/web:abcdef123456"
+	if !fc.called(wantPush) {
+		t.Errorf("push not wrapped with per-job DOCKER_CONFIG: %v", fc.calls)
 	}
 }
 
