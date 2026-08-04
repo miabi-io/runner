@@ -216,10 +216,19 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 	default: // dockerfile
 		buildArgs := []string{"build", "-t", tag}
 		if df := dockerfilePath(step.Build); df != "Dockerfile" {
+			// -f is resolved from the working directory (the source root), not from
+			// the context — same as the docker CLI, so `dockerfile: docker/Dockerfile`
+			// with the default context behaves the way an operator expects.
 			buildArgs = append(buildArgs, "-f", df)
 		}
-		buildArgs = append(buildArgs, ".")
-		log("building " + tag)
+		cdir, err := contextDir(r.workdir, step.Build)
+		if err != nil {
+			return StepResult{}, err
+		}
+		buildArgs = append(buildArgs, buildArgFlags(step.Build, "--build-arg", "")...)
+		rel := contextLabel(r.workdir, cdir)
+		buildArgs = append(buildArgs, rel)
+		log("building " + tag + " (context " + rel + ")")
 		name, args := r.authCmd(r.e.docker, buildArgs...)
 		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("docker build: %w", err)

@@ -34,7 +34,7 @@ const connectPath = "/api/v1/runner/connect"
 
 // Config configures the runner runtime.
 type Config struct {
-	ControlURL string // e.g. https://panel.example.com
+	ControlURL string // e.g. https://miabi.example.com
 	Token      string // registration token (mbr_...)
 	Insecure   bool   // skip TLS verification of the control plane
 	Version    string // runner build version, reported to the control plane

@@ -19,7 +19,7 @@ Register a runner in the Miabi UI (**Settings → Runners → Add runner**, or
 
 ```sh
 docker run -d --name miabi-runner \
-  -e MIABI_CONTROL_URL=https://panel.example.com \
+  -e MIABI_CONTROL_URL=https://miabi.example.com \
   -e MIABI_RUNNER_TOKEN=mbr_xxxxxxxx \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/miabi/builds:/srv/miabi/builds \
@@ -66,4 +66,8 @@ root `Dockerfile` → Dockerfile build, otherwise buildpacks):
   extra buildpacks/build-env come from the job.
 
 The runner reports its OS/arch/version to the control plane on connect (used for
-label/arch job scheduling). Licensed under Apache-2.0.
+label/arch job scheduling).
+
+
+
+Licensed under Apache-2.0.

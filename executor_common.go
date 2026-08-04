@@ -68,6 +68,73 @@ func dockerfilePath(cfg *proto.BuildConfig) string {
 	return "Dockerfile"
 }
 
+// contextDir resolves a build step's context to an absolute path under workdir.
+//
+// The control plane already rejects absolute paths and `..` escapes, but this is
+// the process that actually runs the build: a runner is shared across a
+// workspace's pipelines, and a pipeline file is editable by anyone who can push a
+// branch. Re-checking here means a control plane that ever stops validating —
+// or a runner driven by something else — cannot be talked into mounting the
+// runner's own filesystem as a build context.
+func contextDir(workdir string, cfg *proto.BuildConfig) (string, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Context) == "" {
+		return workdir, nil
+	}
+	rel := strings.TrimSpace(cfg.Context)
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("build context %q must be relative to the repository root", rel)
+	}
+	abs := filepath.Join(workdir, rel)
+	// Join cleans the result, so a contained path keeps workdir as its prefix.
+	if abs != workdir && !strings.HasPrefix(abs, workdir+string(filepath.Separator)) {
+		return "", fmt.Errorf("build context %q escapes the repository", rel)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("build context %q not found in the repository", rel)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("build context %q is not a directory", rel)
+	}
+	return abs, nil
+}
+
+// sortedKeys returns a map's keys in order, so every argv this package builds is
+// deterministic and therefore testable.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// buildArgFlags renders Dockerfile ARG values as repeated flags. flag is the
+// spelling the backend wants: "--build-arg" with the docker CLI, "--opt" with
+// buildctl (whose values carry a "build-arg:" prefix, supplied by the caller).
+func buildArgFlags(cfg *proto.BuildConfig, flag, prefix string) []string {
+	if cfg == nil || len(cfg.BuildArgs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(cfg.BuildArgs)*2)
+	for _, k := range sortedKeys(cfg.BuildArgs) {
+		out = append(out, flag, prefix+k+"="+cfg.BuildArgs[k])
+	}
+	return out
+}
+
+// contextLabel renders a context directory for the build log, relative to the
+// source root so the line reads like the pipeline file ("." or "services/api")
+// rather than leaking the runner's own workdir layout.
+func contextLabel(workdir, dir string) string {
+	rel, err := filepath.Rel(workdir, dir)
+	if err != nil || rel == "" {
+		return "."
+	}
+	return rel
+}
+
 // hasFile reports whether dir contains a regular file named name.
 func hasFile(dir, name string) bool {
 	info, err := os.Stat(filepath.Join(dir, name))
@@ -95,12 +162,7 @@ func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
 			args = append(args, "--buildpack", bp)
 		}
 	}
-	keys := make([]string, 0, len(cfg.BuildEnv))
-	for k := range cfg.BuildEnv {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range sortedKeys(cfg.BuildEnv) {
 		args = append(args, "--env", k+"="+cfg.BuildEnv[k])
 	}
 	return args

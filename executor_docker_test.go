@@ -344,3 +344,122 @@ func TestDeployStepIsNoop(t *testing.T) {
 		t.Errorf("deploy must not run any command, got %v", fc.calls)
 	}
 }
+
+// The reported bug: `dockerfile:` reached the runner but a custom path has to
+// become `-f`, and the context has to stay independent of it — a monorepo keeps
+// docker/Dockerfile while still building from the root.
+func TestBuildStepDockerfileAndContext(t *testing.T) {
+	cases := []struct {
+		name  string
+		build *proto.BuildConfig
+		want  string
+	}{
+		{
+			"defaults are unchanged",
+			nil,
+			"docker build -t reg.example.com/ws-42/web:9 .",
+		},
+		{
+			"custom dockerfile, default context",
+			&proto.BuildConfig{Method: "dockerfile", Dockerfile: "docker/Dockerfile"},
+			"docker build -t reg.example.com/ws-42/web:9 -f docker/Dockerfile .",
+		},
+		{
+			"custom context, default dockerfile",
+			&proto.BuildConfig{Method: "dockerfile", Context: "services/api"},
+			"docker build -t reg.example.com/ws-42/web:9 services/api",
+		},
+		{
+			"both, independently",
+			&proto.BuildConfig{Method: "dockerfile", Dockerfile: "docker/Dockerfile", Context: "services/api"},
+			"docker build -t reg.example.com/ws-42/web:9 -f docker/Dockerfile services/api",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+			e := newTestExecutor(t, fc)
+			job := proto.JobSpec{RunID: 9, Repository: "reg.example.com/ws-42/web", Commit: "abcdef1234567890"}
+			run, err := e.Begin(context.Background(), job, func(string) {})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer run.Close()
+			// The context directory must exist in the checked-out source.
+			if tc.build != nil && tc.build.Context != "" {
+				if err := os.MkdirAll(filepath.Join(run.(*dockerJobRun).workdir, tc.build.Context), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := run.Step(context.Background(),
+				proto.StepSpec{Ordinal: 0, Name: "build", Uses: "build", Build: tc.build},
+				func(string) {}); err != nil {
+				t.Fatalf("build step: %v", err)
+			}
+			if !fc.called(tc.want) {
+				t.Errorf("build command wrong:\n got %v\n want %q", fc.calls, tc.want)
+			}
+		})
+	}
+}
+
+// A context is joined against the checked-out source, so an absolute path or a
+// climbing one would hand the build the runner's own filesystem. The runner is
+// shared across a workspace's pipelines and a pipeline file is editable by anyone
+// who can push a branch, so it re-checks rather than trusting the control plane.
+func TestBuildStepRejectsEscapingContext(t *testing.T) {
+	for _, bad := range []string{"/etc", "../../etc", "sub/../../.."} {
+		t.Run(bad, func(t *testing.T) {
+			fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+			e := newTestExecutor(t, fc)
+			job := proto.JobSpec{RunID: 10, Repository: "reg.example.com/ws-42/web", Commit: "abcdef1234567890"}
+			run, err := e.Begin(context.Background(), job, func(string) {})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer run.Close()
+			_, err = run.Step(context.Background(), proto.StepSpec{
+				Ordinal: 0, Name: "build", Uses: "build",
+				Build: &proto.BuildConfig{Method: "dockerfile", Context: bad},
+			}, func(string) {})
+			if err == nil {
+				t.Fatalf("accepted context %q — the build would read outside the repository", bad)
+			}
+			for _, c := range fc.calls {
+				if strings.HasPrefix(c, "docker build") {
+					t.Errorf("ran a build despite the bad context: %q", c)
+				}
+			}
+		})
+	}
+}
+
+// Build args must be deterministic (sorted) so the argv is testable, and must sit
+// before the positional context — docker reads the context as the last argument.
+func TestBuildStepBuildArgs(t *testing.T) {
+	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+	e := newTestExecutor(t, fc)
+	job := proto.JobSpec{RunID: 11, Repository: "reg.example.com/ws-42/web", Commit: "abcdef1234567890"}
+	run, err := e.Begin(context.Background(), job, func(string) {})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer run.Close()
+
+	if _, err := run.Step(context.Background(), proto.StepSpec{
+		Ordinal: 0, Name: "build", Uses: "build",
+		Build: &proto.BuildConfig{
+			Method:     "dockerfile",
+			Dockerfile: "docker/Dockerfile",
+			BuildArgs:  map[string]string{"VERSION": "1.2.3", "APP_ENV": "prod"},
+		},
+	}, func(string) {}); err != nil {
+		t.Fatalf("build step: %v", err)
+	}
+
+	want := "docker build -t reg.example.com/ws-42/web:11 -f docker/Dockerfile " +
+		"--build-arg APP_ENV=prod --build-arg VERSION=1.2.3 ."
+	if !fc.called(want) {
+		t.Errorf("build command wrong:\n got %v\n want %q", fc.calls, want)
+	}
+}

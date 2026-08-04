@@ -64,14 +64,28 @@ type StepSpec struct {
 type BuildConfig struct {
 	// Method is "" | "auto" | "dockerfile" | "buildpack" (empty/auto auto-detects).
 	Method string `json:"method,omitempty"`
-	// Dockerfile is the Dockerfile path for the dockerfile method (default "Dockerfile").
+	// Dockerfile is the Dockerfile path for the dockerfile method (default "Dockerfile"),
+	// relative to the checked-out source root — NOT to Context, matching
+	// `docker build -f <dockerfile> <context>`, where the two are independent.
 	Dockerfile string `json:"dockerfile,omitempty"`
+	// Context is the build context directory, relative to the checked-out source
+	// root (default: the root itself). A monorepo commonly keeps its Dockerfile in
+	// docker/ while still building from the root, so this must be settable apart
+	// from Dockerfile.
+	Context string `json:"context,omitempty"`
 	// Builder is the CNB builder image for the buildpack method (empty = runner default).
 	Builder string `json:"builder,omitempty"`
 	// Buildpacks are extra buildpacks to apply (pack --buildpack).
 	Buildpacks []string `json:"buildpacks,omitempty"`
 	// BuildEnv is build-time env for the buildpack method (pack --env KEY=VALUE).
 	BuildEnv map[string]string `json:"build_env,omitempty"`
+	// BuildArgs are Dockerfile ARG values for the dockerfile method
+	// (docker build --build-arg KEY=VALUE). The buildpack equivalent is BuildEnv.
+	//
+	// NOT for secrets: a build arg is recorded in the image's own history, so
+	// anyone who can pull the image can read it back. Pass credentials through the
+	// job's env instead.
+	BuildArgs map[string]string `json:"build_args,omitempty"`
 }
 
 // FrameType is the kind of report a runner sends back.
