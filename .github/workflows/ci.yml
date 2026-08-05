@@ -1,0 +1,59 @@
+name: CI
+
+# Runs on every push to the mainline branches and on all pull requests. Tag
+# pushes are handled by release.yml, so they are excluded here.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+  no-docker-sdk:
+    # The runner shells out to the docker / pack / buildctl CLIs by design; it
+    # deliberately links NO Docker SDK. Linking one re-couples Miabi's module
+    # graph to github.com/docker/docker (deprecated, no v29) or moby/moby — the
+    # exact coupling the platform's SDK migration removes. See the "No Docker
+    # SDK" section of README.md for the full rationale.
+    name: No Docker SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: the runner must not link a Docker SDK
+        run: |
+          if go list -m all | grep -qE 'github.com/docker/docker|github.com/moby/moby'; then
+            echo "::error::The runner shells out to the docker CLI by design."
+            echo "::error::Linking a Docker SDK re-couples Miabi's module graph to it."
+            echo "::error::See the 'No Docker SDK' section of README.md before removing this guard."
+            go list -m all | grep -E 'github.com/docker/docker|github.com/moby/moby'
+            exit 1
+          fi
+          echo "OK: no Docker SDK in the module graph."

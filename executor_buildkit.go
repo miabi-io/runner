@@ -112,19 +112,29 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	ref := r.job.Repository + ":" + buildTag(r.job)
 	meta := filepath.Join(r.workdir, ".miabi-build-metadata.json")
 
+	cdir, err := contextDir(r.workdir, step.Build)
+	if err != nil {
+		return StepResult{}, err
+	}
 	buildArgs := []string{
 		"build",
 		"--frontend", "dockerfile.v0",
-		"--local", "context=" + r.workdir,
+		"--local", "context=" + cdir,
+		// The dockerfile local stays the source root, and `filename` is resolved
+		// against it — so a Dockerfile outside the context still builds, matching
+		// `docker build -f` semantics rather than BuildKit's default of expecting
+		// the Dockerfile inside the context.
 		"--local", "dockerfile=" + r.workdir,
 		"--opt", "filename=" + dockerfilePath(step.Build),
 		"--output", fmt.Sprintf("type=image,name=%s,push=true", ref),
 		"--metadata-file", meta,
 	}
+	// buildctl spells a Dockerfile ARG as `--opt build-arg:KEY=VALUE`.
+	buildArgs = append(buildArgs, buildArgFlags(step.Build, "--opt", "build-arg:")...)
 	// Point BuildKit at the per-job docker config for its push credential.
 	name, args := r.buildctlCmd(buildArgs)
 
-	log("building " + ref + " (rootless buildkit)")
+	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + ")")
 	if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("buildctl: %w", err)
 	} else if code != 0 {
