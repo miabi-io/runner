@@ -25,7 +25,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 	"github.com/jkaninda/logger"
-	"github.com/miabi-io/wstunnel"
+	"github.com/jkaninda/wstunnel"
 )
 
 // connectPath is the runner tunnel endpoint on the control plane (a distinct
