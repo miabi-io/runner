@@ -171,8 +171,8 @@ func TestJobLogsCarryNoCredentials(t *testing.T) {
 			t.Errorf("the log leaked %q\n---\n%s", leak, out)
 		}
 	}
-	// …while still saying where the code came from.
-	if !strings.Contains(out, "github.com/acme/app.git") {
-		t.Errorf("the source host was stripped along with the credential\n---\n%s", out)
+	// The source URL is not logged at all, so nothing of it may appear.
+	if strings.Contains(out, "github.com/acme/app.git") {
+		t.Errorf("the clone URL reached the log\n---\n%s", out)
 	}
 }

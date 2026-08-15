@@ -135,7 +135,7 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	name, args := r.buildctlCmd(buildArgs)
 
 	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + ")")
-	if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
+	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("buildctl: %w", err)
 	} else if code != 0 {
 		return StepResult{Exit: code}, nil
