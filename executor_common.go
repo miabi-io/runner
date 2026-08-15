@@ -171,10 +171,10 @@ func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
 // commander runs external commands; abstracted so the executors are unit-testable
 // without a real docker/buildkit/git.
 type commander interface {
-	// run executes name+args in dir, streaming combined output to log line by
-	// line, and returns the process exit code. A non-zero exit is (code, nil); a
-	// failure to start is (-1, err).
-	run(ctx context.Context, dir string, log func(string), name string, args ...string) (int, error)
+	// run executes name+args in dir with env added to the child's environment,
+	// streaming combined output to log line by line, and returns the exit code. A
+	// non-zero exit is (code, nil); a failure to start is (-1, err).
+	run(ctx context.Context, dir string, env []string, log func(string), name string, args ...string) (int, error)
 	// capture runs a command and returns its trimmed stdout.
 	capture(ctx context.Context, dir, name string, args ...string) (string, error)
 	// loginStdin runs a command with secret piped to its stdin (registry login).
@@ -185,11 +185,11 @@ type commander interface {
 // source URL is never logged (it may embed a credential).
 func gitCheckout(ctx context.Context, cmd commander, gitBin, workdir string, job proto.JobSpec, log func(string)) error {
 	log("cloning source")
-	if code, err := cmd.run(ctx, "", log, gitBin, "clone", job.SourceURL, workdir); err != nil || code != 0 {
+	if code, err := cmd.run(ctx, "", nil, log, gitBin, "clone", job.SourceURL, workdir); err != nil || code != 0 {
 		return fmt.Errorf("git clone failed (exit %d): %w", code, err)
 	}
 	if job.Commit != "" {
-		if code, err := cmd.run(ctx, workdir, log, gitBin, "checkout", "--detach", job.Commit); err != nil || code != 0 {
+		if code, err := cmd.run(ctx, workdir, nil, log, gitBin, "checkout", "--detach", job.Commit); err != nil || code != 0 {
 			return fmt.Errorf("git checkout %s failed (exit %d): %w", job.Commit, code, err)
 		}
 	}
@@ -225,9 +225,12 @@ func envMap(env []string) map[string]string {
 // execCommander is the real commander over os/exec.
 type execCommander struct{}
 
-func (execCommander) run(ctx context.Context, dir string, log func(string), name string, args ...string) (int, error) {
+func (execCommander) run(ctx context.Context, dir string, env []string, log func(string), name string, args ...string) (int, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	w := &lineWriter{emit: log}
 	cmd.Stdout, cmd.Stderr = w, w
 	err := cmd.Run()

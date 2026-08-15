@@ -208,7 +208,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		}
 		log(fmt.Sprintf("building %s with buildpacks (builder %s)", tag, builder))
 		name, args := r.authCmd(r.e.pack, packArgs(tag, builder, step.Build)...)
-		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
+		if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("pack build: %w", err)
 		} else if code != 0 {
 			return StepResult{Exit: code}, nil
@@ -230,7 +230,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		buildArgs = append(buildArgs, rel)
 		log("building " + tag + " (context " + rel + ")")
 		name, args := r.authCmd(r.e.docker, buildArgs...)
-		if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
+		if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("docker build: %w", err)
 		} else if code != 0 {
 			return StepResult{Exit: code}, nil
@@ -239,7 +239,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 
 	log("pushing " + tag)
 	name, args := r.authCmd(r.e.docker, "push", tag)
-	if code, err := r.e.cmd.run(ctx, r.workdir, log, name, args...); err != nil {
+	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("docker push: %w", err)
 	} else if code != 0 {
 		return StepResult{Exit: code}, nil
@@ -267,11 +267,19 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	}
 	args := []string{"run", "--rm", "-w", "/workspace", "-v", r.workdir + ":/workspace"}
 
+	// `-e NAME` (no value) tells docker to take it from our own environment, so a
+	// resolved secret never lands in a command line every local user can read.
 	stepEnv := append([]string{}, r.job.Env...)
 	stepEnv = append(stepEnv, r.exportedEnv()...)
 	stepEnv = append(stepEnv, step.Env...)
+	childEnv := make([]string, 0, len(stepEnv))
 	for _, e := range stepEnv {
-		args = append(args, "-e", e)
+		name, _, ok := strings.Cut(e, "=")
+		if !ok || name == "" {
+			continue
+		}
+		args = append(args, "-e", name)
+		childEnv = append(childEnv, e)
 	}
 	// Mount the shared env file and point $MIABI_ENV at it so this step can export
 	// its own vars to later steps (`echo KEY=VALUE >> $MIABI_ENV`).
@@ -288,7 +296,7 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	}
 
 	name, cargs := r.authCmd(r.e.docker, args...)
-	code, err := r.e.cmd.run(ctx, "", log, name, cargs...)
+	code, err := r.e.cmd.run(ctx, "", childEnv, log, name, cargs...)
 	if err != nil {
 		return StepResult{}, err
 	}

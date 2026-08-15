@@ -26,9 +26,11 @@ type fakeCommander struct {
 	digestOut string
 	loginErr  error
 	logins    int
+	env       []string // child env of the last run
 }
 
-func (f *fakeCommander) run(_ context.Context, _ string, log func(string), name string, args ...string) (int, error) {
+func (f *fakeCommander) run(_ context.Context, _ string, env []string, log func(string), name string, args ...string) (int, error) {
+	f.env = env
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	log(name + " output")
 	if name == "docker" && len(args) > 0 {
@@ -42,6 +44,16 @@ func (f *fakeCommander) run(_ context.Context, _ string, log func(string), name 
 		}
 	}
 	return 0, nil // git clone/checkout
+}
+
+// inEnv reports whether the last run received this KEY=VALUE in its child env.
+func (f *fakeCommander) inEnv(want string) bool {
+	for _, e := range f.env {
+		if e == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeCommander) capture(_ context.Context, _, name string, args ...string) (string, error) {
@@ -258,8 +270,11 @@ func TestContainerStepMountsWorkspace(t *testing.T) {
 	if !fc.called("docker run --rm -w /workspace -v") || !fc.called("--entrypoint sh golang:1.25 -c go test ./...") {
 		t.Errorf("container run command wrong: %v", fc.calls)
 	}
-	if !fc.called("-e FOO=bar") || !fc.called("-e CI=true") {
-		t.Errorf("job + step env not injected: %v", fc.calls)
+	if !fc.called("-e FOO") || !fc.called("-e CI") {
+		t.Errorf("job + step env not passed through: %v", fc.calls)
+	}
+	if !fc.inEnv("FOO=bar") || !fc.inEnv("CI=true") {
+		t.Errorf("job + step env not injected: %v", fc.env)
 	}
 }
 
@@ -281,11 +296,11 @@ func TestContainerStepSeesBuiltImage(t *testing.T) {
 	}, func(string) {}); err != nil {
 		t.Fatalf("scan step: %v", err)
 	}
-	if !fc.called("-e MIABI_IMAGE=reg.example.com/ws-42/web:run-57") {
-		t.Errorf("MIABI_IMAGE not exported to the scan step: %v", fc.calls)
+	if !fc.inEnv("MIABI_IMAGE=reg.example.com/ws-42/web:run-57") {
+		t.Errorf("MIABI_IMAGE not exported to the scan step: %v", fc.env)
 	}
-	if !fc.called("-e MIABI_IMAGE_DIGEST=reg.example.com/ws-42/web@sha256:cafebabe") {
-		t.Errorf("MIABI_IMAGE_DIGEST not exported: %v", fc.calls)
+	if !fc.inEnv("MIABI_IMAGE_DIGEST=reg.example.com/ws-42/web@sha256:cafebabe") {
+		t.Errorf("MIABI_IMAGE_DIGEST not exported: %v", fc.env)
 	}
 }
 
@@ -305,8 +320,8 @@ func TestStepEnvExportPropagates(t *testing.T) {
 	}, func(string) {}); err != nil {
 		t.Fatalf("step: %v", err)
 	}
-	if !fc.called("-e VERSION=1.2.3") {
-		t.Errorf("exported var not propagated to the next step: %v", fc.calls)
+	if !fc.inEnv("VERSION=1.2.3") {
+		t.Errorf("exported var not propagated to the next step: %v", fc.env)
 	}
 	if !fc.called(":/miabi/env") || !fc.called("-e MIABI_ENV=/miabi/env") {
 		t.Errorf("$MIABI_ENV file not mounted into the step: %v", fc.calls)
@@ -461,5 +476,70 @@ func TestBuildStepBuildArgs(t *testing.T) {
 		"--build-arg APP_ENV=prod --build-arg VERSION=1.2.3 ."
 	if !fc.called(want) {
 		t.Errorf("build command wrong:\n got %v\n want %q", fc.calls, want)
+	}
+}
+
+// A resolved workspace secret must not reach the command line: argv is readable
+// by every local user on the runner host via ps.
+func TestContainerStepKeepsEnvValuesOutOfArgv(t *testing.T) {
+	f := &fakeCommander{}
+	e := &dockerExecutor{cmd: f, docker: "docker", git: "git", workRoot: t.TempDir()}
+	job := proto.JobSpec{RunID: 1, Env: []string{"MIABI_REGISTRY_TOKEN=reg_s3cret"}}
+	run, err := e.Begin(context.Background(), job, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+
+	step := proto.StepSpec{
+		Ordinal: 0, Name: "test", Image: "node:22",
+		Run: []string{"sh", "-c", "npm test"},
+		Env: []string{"NPM_TOKEN=npm_live_SECRET", "CI=true"},
+	}
+	if _, err := run.Step(context.Background(), step, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	argv := strings.Join(f.calls, " ")
+	for _, secret := range []string{"npm_live_SECRET", "reg_s3cret"} {
+		if strings.Contains(argv, secret) {
+			t.Errorf("secret %q appeared in the command line: %s", secret, argv)
+		}
+	}
+	// The names are still passed, so docker forwards them from our environment.
+	for _, name := range []string{"-e NPM_TOKEN", "-e CI", "-e MIABI_REGISTRY_TOKEN"} {
+		if !strings.Contains(argv, name) {
+			t.Errorf("argv is missing %q: %s", name, argv)
+		}
+	}
+	child := strings.Join(f.env, " ")
+	for _, want := range []string{"NPM_TOKEN=npm_live_SECRET", "CI=true", "MIABI_REGISTRY_TOKEN=reg_s3cret"} {
+		if !strings.Contains(child, want) {
+			t.Errorf("child env is missing %q: %v", want, f.env)
+		}
+	}
+}
+
+// Step env wins over the job's on a collision, matching the control plane's
+// documented precedence.
+func TestContainerStepEnvPrecedence(t *testing.T) {
+	f := &fakeCommander{}
+	e := &dockerExecutor{cmd: f, docker: "docker", git: "git", workRoot: t.TempDir()}
+	job := proto.JobSpec{RunID: 1, Env: []string{"SHARED=pipeline"}}
+	run, _ := e.Begin(context.Background(), job, func(string) {})
+	defer run.Close()
+
+	step := proto.StepSpec{Ordinal: 0, Name: "s", Image: "x", Env: []string{"SHARED=step"}}
+	if _, err := run.Step(context.Background(), step, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for _, e := range f.env {
+		if strings.HasPrefix(e, "SHARED=") {
+			last = e
+		}
+	}
+	if last != "SHARED=step" {
+		t.Errorf("effective SHARED = %q, want the step's value", last)
 	}
 }
