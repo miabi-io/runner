@@ -6,7 +6,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/jkaninda/go-utils v0.1.4
 	github.com/jkaninda/logger v0.0.5
-	github.com/miabi-io/wstunnel v0.0.1
+	github.com/jkaninda/wstunnel v0.0.2
 )
 
 require (

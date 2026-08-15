@@ -6,7 +6,7 @@ github.com/jkaninda/go-utils v0.1.4 h1:ZdNlI+yLWc4/S0qKcCNQIPj+6lHSdJcGaxtRADAif
 github.com/jkaninda/go-utils v0.1.4/go.mod h1:Aa54jEAcDykc3CnOdreqZG80UfSZOvrYecyusu+oPb4=
 github.com/jkaninda/logger v0.0.5 h1:fTHKgDsHtuN8rkSBvwe6QStfi8yIdm8O3r0g99dRDTY=
 github.com/jkaninda/logger v0.0.5/go.mod h1:ZUXJ2BdxDPG6e8t6mbKhc2ZFaFi2Iuy/4ukquFrPkFE=
-github.com/miabi-io/wstunnel v0.0.1 h1:LDUjrYXYDPLeHcvUxBDC4b1JrD90GJ15xTQx0oAtz2I=
-github.com/miabi-io/wstunnel v0.0.1/go.mod h1:lW1sYEWx4eHMoTFUxewGp+3jHWNEZO1LJpwB9b/eLtA=
+github.com/jkaninda/wstunnel v0.0.2 h1:ljsi8z3OWdWhHN1/1x+rFWYCcN0kgv8LdP57KgVOWfI=
+github.com/jkaninda/wstunnel v0.0.2/go.mod h1:BTwnAUbTEMP0pZCE3VaN9YU+ALLvtNKSYKhXoD/gfkY=
 gopkg.in/natefinch/lumberjack.v2 v2.2.1 h1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=
 gopkg.in/natefinch/lumberjack.v2 v2.2.1/go.mod h1:YD8tP3GAjkrDg1eZH7EGmyESg/lsYskCTPBJVb9jqSc=

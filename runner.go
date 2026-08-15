@@ -25,7 +25,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 	"github.com/jkaninda/logger"
-	"github.com/miabi-io/wstunnel"
+	"github.com/jkaninda/wstunnel"
 )
 
 // connectPath is the runner tunnel endpoint on the control plane (a distinct
@@ -46,9 +46,6 @@ type Config struct {
 // (WebSocket + yamux, framing, keepalive) is the shared wstunnel module, so the
 // runner and control plane are guaranteed to speak the same wire protocol.
 func Run(ctx context.Context, cfg Config) error {
-	// Pick the build backend: rootless BuildKit (daemonless, no docker.sock) or
-	// the local Docker daemon (also supports container steps). Both run on the
-	// runner's own machine, never a hosting node.
 	var exec Executor
 	if cfg.Builder == "buildkit" {
 		exec = newBuildkitExecutor()
@@ -66,8 +63,7 @@ func Run(ctx context.Context, cfg Config) error {
 			logger.Warn("runner disconnected", "error", err)
 		},
 	}
-	// Each stream the control plane opens is one job to execute; serve it for the
-	// connection's lifetime so a dropped tunnel cancels in-flight jobs.
+
 	return wstunnel.Serve(ctx, opts, func(connCtx context.Context, sess *yamux.Session) error {
 		for {
 			stream, err := sess.AcceptStream()
@@ -79,13 +75,11 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 }
 
-// serveJob runs one job stream to completion and closes it. A job error is only
-// logged: it has already been reported to the control plane as a terminal frame.
+// serveJob runs one job stream to completion and closes it. runJob reports the
+// outcome to the control plane and logs it, so there is nothing to add here.
 func serveJob(ctx context.Context, stream net.Conn, exec Executor) {
 	defer func() { _ = stream.Close() }()
-	if err := runJob(ctx, stream, exec); err != nil {
-		logger.Warn("job ended with error", "error", err)
-	}
+	_ = runJob(ctx, stream, exec)
 }
 
 // authHeader carries the registration token and the runner's self-reported
