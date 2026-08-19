@@ -132,6 +132,9 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	if noCache(step.Build) {
 		buildArgs = append(buildArgs, "--no-cache")
 	}
+	// A cold build still exports: it repopulates the ref the next build reads, which is the whole
+	// point of rotating the cache rather than only skipping it.
+	buildArgs = append(buildArgs, cacheFlags(step.Build)...)
 	// buildctl spells a Dockerfile ARG as `--opt build-arg:KEY=VALUE`.
 	buildArgs = append(buildArgs, buildArgFlags(step.Build, "--opt", "build-arg:")...)
 	// Point BuildKit at the per-job docker config for its push credential.

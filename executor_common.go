@@ -140,6 +140,28 @@ func cacheNote(cfg *proto.BuildConfig) string {
 	return ""
 }
 
+// cacheFlags renders the registry layer cache as buildctl flags. Imports are skipped for a cold
+// build; the export is not, so the rebuilt layers land in the cache the next build reads.
+func cacheFlags(cfg *proto.BuildConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	if !cfg.NoCache {
+		for _, ref := range cfg.CacheFrom {
+			if strings.TrimSpace(ref) != "" {
+				out = append(out, "--import-cache", "type=registry,ref="+ref)
+			}
+		}
+	}
+	// mode=max caches intermediate stages too — the expensive half of a multi-stage build is the
+	// stages the final image never carries.
+	if strings.TrimSpace(cfg.CacheTo) != "" {
+		out = append(out, "--export-cache", "type=registry,ref="+cfg.CacheTo+",mode=max")
+	}
+	return out
+}
+
 // contextLabel renders a context directory for the build log
 func contextLabel(workdir, dir string) string {
 	rel, err := filepath.Rel(workdir, dir)
