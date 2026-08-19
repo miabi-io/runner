@@ -129,12 +129,15 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 		"--output", fmt.Sprintf("type=image,name=%s,push=true", ref),
 		"--metadata-file", meta,
 	}
+	if noCache(step.Build) {
+		buildArgs = append(buildArgs, "--no-cache")
+	}
 	// buildctl spells a Dockerfile ARG as `--opt build-arg:KEY=VALUE`.
 	buildArgs = append(buildArgs, buildArgFlags(step.Build, "--opt", "build-arg:")...)
 	// Point BuildKit at the per-job docker config for its push credential.
 	name, args := r.buildctlCmd(buildArgs)
 
-	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + ")")
+	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + cacheNote(step.Build) + ")")
 	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("buildctl: %w", err)
 	} else if code != 0 {

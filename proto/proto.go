@@ -86,6 +86,8 @@ type BuildConfig struct {
 	// anyone who can pull the image can read it back. Pass credentials through the
 	// job's env instead.
 	BuildArgs map[string]string `json:"build_args,omitempty"`
+	// NoCache builds every layer from scratch, ignoring any cache the builder
+	NoCache bool `json:"no_cache,omitempty"`
 }
 
 // FrameType is the kind of report a runner sends back.

@@ -206,7 +206,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		if builder == "" {
 			builder = r.e.defaultBuilder
 		}
-		log(fmt.Sprintf("building %s with buildpacks (builder %s)", tag, builder))
+		log(fmt.Sprintf("building %s with buildpacks (builder %s%s)", tag, builder, cacheNote(step.Build)))
 		name, args := r.authCmd(r.e.pack, packArgs(tag, builder, step.Build)...)
 		if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("pack build: %w", err)
@@ -215,10 +215,10 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		}
 	default: // dockerfile
 		buildArgs := []string{"build", "-t", tag}
+		if noCache(step.Build) {
+			buildArgs = append(buildArgs, "--no-cache")
+		}
 		if df := dockerfilePath(step.Build); df != "Dockerfile" {
-			// -f is resolved from the working directory (the source root), not from
-			// the context — same as the docker CLI, so `dockerfile: docker/Dockerfile`
-			// with the default context behaves the way an operator expects.
 			buildArgs = append(buildArgs, "-f", df)
 		}
 		cdir, err := contextDir(r.workdir, step.Build)
@@ -228,7 +228,7 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 		buildArgs = append(buildArgs, buildArgFlags(step.Build, "--build-arg", "")...)
 		rel := contextLabel(r.workdir, cdir)
 		buildArgs = append(buildArgs, rel)
-		log("building " + tag + " (context " + rel + ")")
+		log("building " + tag + " (context " + rel + cacheNote(step.Build) + ")")
 		name, args := r.authCmd(r.e.docker, buildArgs...)
 		if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 			return StepResult{}, fmt.Errorf("docker build: %w", err)

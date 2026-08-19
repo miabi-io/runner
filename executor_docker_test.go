@@ -543,3 +543,69 @@ func TestContainerStepEnvPrecedence(t *testing.T) {
 		t.Errorf("effective SHARED = %q, want the step's value", last)
 	}
 }
+
+// Cache busting moved out of the Dockerfile: a build step can ask for a cold
+// build, and each backend has to spell it its own way. Caching stays the
+// default — a no-cache build costs minutes, so it is never implicit.
+func TestBuildStepNoCache(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   *proto.BuildConfig
+		want    string
+		notWant string
+	}{
+		{
+			"dockerfile builds cached by default",
+			&proto.BuildConfig{Method: "dockerfile"},
+			"docker build -t reg.example.com/ws-42/web:11 .",
+			"--no-cache",
+		},
+		{
+			"dockerfile no-cache",
+			&proto.BuildConfig{Method: "dockerfile", NoCache: true},
+			"docker build -t reg.example.com/ws-42/web:11 --no-cache .",
+			"",
+		},
+		{
+			"no-cache alongside a custom dockerfile and args",
+			&proto.BuildConfig{Method: "dockerfile", Dockerfile: "docker/Dockerfile", NoCache: true, BuildArgs: map[string]string{"VERSION": "2"}},
+			"docker build -t reg.example.com/ws-42/web:11 --no-cache -f docker/Dockerfile --build-arg VERSION=2 .",
+			"",
+		},
+		{
+			"buildpack no-cache clears the cache volume",
+			&proto.BuildConfig{Method: "buildpack", Builder: "paketobuildpacks/builder-jammy-base", NoCache: true},
+			"--clear-cache",
+			"",
+		},
+		{
+			"buildpack builds cached by default",
+			&proto.BuildConfig{Method: "buildpack", Builder: "paketobuildpacks/builder-jammy-base"},
+			"pack build reg.example.com/ws-42/web:11",
+			"--clear-cache",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
+			e := newTestExecutor(t, fc)
+			job := proto.JobSpec{RunID: 11, Repository: "reg.example.com/ws-42/web", Commit: "abcdef1234567890"}
+			run, err := e.Begin(context.Background(), job, func(string) {})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer run.Close()
+			if _, err := run.Step(context.Background(),
+				proto.StepSpec{Ordinal: 0, Name: "build", Uses: "build", Build: tc.build},
+				func(string) {}); err != nil {
+				t.Fatalf("build step: %v", err)
+			}
+			if !fc.called(tc.want) {
+				t.Errorf("build command wrong:\n got %v\n want %q", fc.calls, tc.want)
+			}
+			if tc.notWant != "" && fc.called(tc.notWant) {
+				t.Errorf("build command must not carry %q: %v", tc.notWant, fc.calls)
+			}
+		})
+	}
+}

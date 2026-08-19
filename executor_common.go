@@ -124,9 +124,23 @@ func buildArgFlags(cfg *proto.BuildConfig, flag, prefix string) []string {
 	return out
 }
 
-// contextLabel renders a context directory for the build log, relative to the
-// source root so the line reads like the pipeline file ("." or "services/api")
-// rather than leaking the runner's own workdir layout.
+// noCache reports whether this build must ignore every cached layer. A nil
+// config means the platform sent no build settings at all, which is the cached
+// default.
+func noCache(cfg *proto.BuildConfig) bool {
+	return cfg != nil && cfg.NoCache
+}
+
+// cacheNote is the log suffix that tells the operator this build ignored the
+// cache.
+func cacheNote(cfg *proto.BuildConfig) string {
+	if noCache(cfg) {
+		return ", no cache"
+	}
+	return ""
+}
+
+// contextLabel renders a context directory for the build log
 func contextLabel(workdir, dir string) string {
 	rel, err := filepath.Rel(workdir, dir)
 	if err != nil || rel == "" {
@@ -156,6 +170,10 @@ func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
 	}
 	if cfg == nil {
 		return args
+	}
+
+	if cfg.NoCache {
+		args = append(args, "--clear-cache")
 	}
 	for _, bp := range cfg.Buildpacks {
 		if strings.TrimSpace(bp) != "" {
