@@ -93,3 +93,33 @@ func TestReadImageDigest(t *testing.T) {
 		t.Error("want error for missing metadata file")
 	}
 }
+
+// The buildkit backend spells a cold build `buildctl build --no-cache`, and
+// leaves the cache in place when the step did not ask for one.
+func TestBuildkitNoCache(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		build   *proto.BuildConfig
+		wantArg bool
+	}{
+		{"cached by default", nil, false},
+		{"no-cache requested", &proto.BuildConfig{Method: "dockerfile", NoCache: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeCommander{}
+			e := newTestBuildkit(t, fc)
+			job := proto.JobSpec{RunID: 6, Repository: "reg.example.com/ws_42/app-1", Commit: "abcdef1234567890"}
+			run, err := e.Begin(context.Background(), job, func(string) {})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer run.Close()
+			if _, err := run.Step(context.Background(), proto.StepSpec{Uses: "build", Build: tc.build}, func(string) {}); err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			if got := fc.called("--no-cache"); got != tc.wantArg {
+				t.Errorf("--no-cache present = %v, want %v: %v", got, tc.wantArg, fc.calls)
+			}
+		})
+	}
+}
