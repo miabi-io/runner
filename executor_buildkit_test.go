@@ -123,3 +123,64 @@ func TestBuildkitNoCache(t *testing.T) {
 		})
 	}
 }
+
+// Registry cache is what makes a bumped cache generation actually cold and the next build warm
+// again: imports are dropped for a cold build, but the export never is — it repopulates the ref.
+func TestBuildkitRegistryCache(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		build      *proto.BuildConfig
+		wantImport []string
+		noImport   []string
+		wantExport string
+	}{
+		{
+			"imports and exports",
+			&proto.BuildConfig{Method: "dockerfile", CacheFrom: []string{"reg/app:cache-feat-g1", "reg/app:cache-main-g1"}, CacheTo: "reg/app:cache-feat-g1"},
+			[]string{"type=registry,ref=reg/app:cache-feat-g1", "type=registry,ref=reg/app:cache-main-g1"},
+			nil,
+			"type=registry,ref=reg/app:cache-feat-g1,mode=max",
+		},
+		{
+			"cold build exports but imports nothing",
+			&proto.BuildConfig{Method: "dockerfile", NoCache: true, CacheFrom: []string{"reg/app:cache-main-g2"}, CacheTo: "reg/app:cache-main-g2"},
+			nil,
+			[]string{"--import-cache"},
+			"type=registry,ref=reg/app:cache-main-g2,mode=max",
+		},
+		{
+			"no refs, no flags",
+			&proto.BuildConfig{Method: "dockerfile"},
+			nil,
+			[]string{"--import-cache", "--export-cache"},
+			"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeCommander{}
+			e := newTestBuildkit(t, fc)
+			job := proto.JobSpec{RunID: 6, Repository: "reg.example.com/ws_42/app-1", Commit: "abcdef1234567890"}
+			run, err := e.Begin(context.Background(), job, func(string) {})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer run.Close()
+			if _, err := run.Step(context.Background(), proto.StepSpec{Uses: "build", Build: tc.build}, func(string) {}); err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			for _, want := range tc.wantImport {
+				if !fc.called(want) {
+					t.Errorf("missing import %q: %v", want, fc.calls)
+				}
+			}
+			for _, bad := range tc.noImport {
+				if fc.called(bad) {
+					t.Errorf("unexpected %q: %v", bad, fc.calls)
+				}
+			}
+			if tc.wantExport != "" && !fc.called(tc.wantExport) {
+				t.Errorf("missing export %q: %v", tc.wantExport, fc.calls)
+			}
+		})
+	}
+}

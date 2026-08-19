@@ -88,6 +88,11 @@ type BuildConfig struct {
 	BuildArgs map[string]string `json:"build_args,omitempty"`
 	// NoCache builds every layer from scratch, ignoring any cache the builder
 	NoCache bool `json:"no_cache,omitempty"`
+	// CacheFrom are registry refs to seed the layer cache from. Ignored when NoCache is set.
+	CacheFrom []string `json:"cache_from,omitempty"`
+	// CacheTo is the registry ref this build writes its cache to. Separate from CacheFrom so a branch
+	// build can read the trunk's cache without ever writing layers into one a trunk build would trust.
+	CacheTo string `json:"cache_to,omitempty"`
 }
 
 // FrameType is the kind of report a runner sends back.
