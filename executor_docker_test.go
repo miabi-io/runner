@@ -27,6 +27,8 @@ type fakeCommander struct {
 	loginErr  error
 	logins    int
 	env       []string // child env of the last run
+	// answer, when set, scripts capture per command line; otherwise capture returns digestOut.
+	answer func(cmd string) (string, error)
 }
 
 func (f *fakeCommander) run(_ context.Context, _ string, env []string, log func(string), name string, args ...string) (int, error) {
@@ -57,7 +59,11 @@ func (f *fakeCommander) inEnv(want string) bool {
 }
 
 func (f *fakeCommander) capture(_ context.Context, _, name string, args ...string) (string, error) {
-	f.calls = append(f.calls, "capture "+name+" "+strings.Join(args, " "))
+	cmd := name + " " + strings.Join(args, " ")
+	f.calls = append(f.calls, "capture "+cmd)
+	if f.answer != nil {
+		return f.answer(cmd)
+	}
 	return f.digestOut, nil
 }
 

@@ -7,11 +7,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/miabi-io/runner/proto"
 )
@@ -137,10 +137,14 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	buildArgs = append(buildArgs, cacheFlags(step.Build)...)
 	// buildctl spells a Dockerfile ARG as `--opt build-arg:KEY=VALUE`.
 	buildArgs = append(buildArgs, buildArgFlags(step.Build, "--opt", "build-arg:")...)
+	if ps := platforms(step.Build); len(ps) > 0 {
+		buildArgs = append(buildArgs, "--opt", "platform="+strings.Join(ps, ","))
+		warnEmulators(step.Build, log)
+	}
 	// Point BuildKit at the per-job docker config for its push credential.
 	name, args := r.buildctlCmd(buildArgs)
 
-	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + cacheNote(step.Build) + ")")
+	log("building " + ref + " (rootless buildkit, context " + contextLabel(r.workdir, cdir) + cacheNote(step.Build) + platformNote(step.Build) + ")")
 	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil {
 		return StepResult{}, fmt.Errorf("buildctl: %w", err)
 	} else if code != 0 {
@@ -162,20 +166,4 @@ func (r *buildkitJobRun) buildctlCmd(buildArgs []string) (string, []string) {
 		return "env", append([]string{"DOCKER_CONFIG=" + r.cfgDir, r.e.buildctl}, buildArgs...)
 	}
 	return r.e.buildctl, buildArgs
-}
-
-// readImageDigest reads the pushed image digest from a buildctl --metadata-file.
-func readImageDigest(metaFile string) (string, error) {
-	b, err := os.ReadFile(metaFile)
-	if err != nil {
-		return "", err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return "", err
-	}
-	if d, ok := m["containerimage.digest"].(string); ok && d != "" {
-		return d, nil
-	}
-	return "", fmt.Errorf("no containerimage.digest in build metadata")
 }

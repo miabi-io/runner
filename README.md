@@ -65,8 +65,30 @@ root `Dockerfile` → Dockerfile build, otherwise buildpacks):
   (`docker` backend only; buildpacks need a Docker daemon). The builder image and
   extra buildpacks/build-env come from the job.
 
-The runner reports its OS/arch/version to the control plane on connect (used for
-label/arch job scheduling).
+### Multi-platform images
+
+A Dockerfile build can target several platforms (a pipeline's `platforms:`), and
+pushes one image whose digest names all of them; each node pulls its own. The
+rootless BuildKit backend builds them with `buildctl`. The docker backend uses
+`docker buildx`: the daemon's own builder when it runs the containerd image
+store, otherwise a `miabi-runner` docker-container builder it creates once.
+Buildpack builds produce the runner's own platform only.
+
+Building for another architecture than the runner's needs QEMU registered on the
+host, unless the Dockerfile cross-compiles on `$BUILDPLATFORM`. The build log
+warns when an emulator is missing. Register them once per host:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install all
+```
+
+The docker-container builder does not use the daemon's `insecure-registries`
+setting, and the BuildKit backend never did, so the registry must present a
+certificate the runner trusts.
+
+The runner reports its OS/arch/version and features (`multi-platform`) to the
+control plane on connect (used for label/arch job scheduling, and to send a
+multi-platform build only to a runner that can carry it out).
 
 
 
