@@ -9,11 +9,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -158,6 +160,102 @@ func cacheFlags(cfg *proto.BuildConfig) []string {
 	// stages the final image never carries.
 	if strings.TrimSpace(cfg.CacheTo) != "" {
 		out = append(out, "--export-cache", "type=registry,ref="+cfg.CacheTo+",mode=max")
+	}
+	return out
+}
+
+// platforms is the build's target platforms, blanks dropped; empty builds for the runner's own platform.
+func platforms(cfg *proto.BuildConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range cfg.Platforms {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func platformNote(cfg *proto.BuildConfig) string {
+	if ps := platforms(cfg); len(ps) > 0 {
+		return ", platforms " + strings.Join(ps, ",")
+	}
+	return ""
+}
+
+// binfmtDir is where the kernel lists the interpreters it runs foreign binaries through. A var for tests.
+var binfmtDir = "/proc/sys/fs/binfmt_misc"
+
+// qemuArch maps a platform's architecture to the name QEMU registers its binfmt handler under.
+var qemuArch = map[string]string{
+	"amd64": "x86_64", "arm64": "aarch64", "arm": "arm", "386": "i386",
+	"ppc64le": "ppc64le", "s390x": "s390x", "riscv64": "riscv64",
+}
+
+// missingEmulators lists the platforms whose RUN instructions cannot execute here: another architecture
+// than the runner's with no QEMU handler registered. Such a build still succeeds when the Dockerfile
+// cross-compiles on $BUILDPLATFORM, so this warns rather than refuses.
+func missingEmulators(ps []string, native string) []string {
+	var out []string
+	for _, p := range ps {
+		parts := strings.Split(p, "/")
+		if len(parts) < 2 || parts[1] == native {
+			continue
+		}
+		name, ok := qemuArch[parts[1]]
+		if !ok {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(binfmtDir, "qemu-"+name)); err != nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// warnEmulators logs which platforms lack an emulator, and how to add one.
+func warnEmulators(cfg *proto.BuildConfig, log func(string)) {
+	if missing := missingEmulators(platforms(cfg), runtime.GOARCH); len(missing) > 0 {
+		log("warning: no QEMU emulator registered on this host for " + strings.Join(missing, ", ") +
+			"; RUN instructions for them will fail unless the Dockerfile cross-compiles on $BUILDPLATFORM. " +
+			"Register emulators on the host with: docker run --privileged --rm tonistiigi/binfmt --install all")
+	}
+}
+
+// readImageDigest reads the pushed image digest from a build --metadata-file. For a multi-platform build it
+// is the index's digest, which a node of any listed platform deploys by.
+func readImageDigest(metaFile string) (string, error) {
+	b, err := os.ReadFile(metaFile)
+	if err != nil {
+		return "", err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return "", err
+	}
+	if d, ok := m["containerimage.digest"].(string); ok && d != "" {
+		return d, nil
+	}
+	return "", fmt.Errorf("no containerimage.digest in build metadata")
+}
+
+// buildxCacheFlags is cacheFlags in docker buildx's spelling.
+func buildxCacheFlags(cfg *proto.BuildConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	if !cfg.NoCache {
+		for _, ref := range cfg.CacheFrom {
+			if strings.TrimSpace(ref) != "" {
+				out = append(out, "--cache-from", "type=registry,ref="+ref)
+			}
+		}
+	}
+	if strings.TrimSpace(cfg.CacheTo) != "" {
+		out = append(out, "--cache-to", "type=registry,ref="+cfg.CacheTo+",mode=max")
 	}
 	return out
 }

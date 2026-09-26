@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/yamux"
 	"github.com/jkaninda/logger"
 	"github.com/jkaninda/wstunnel"
+	"github.com/miabi-io/runner/proto"
 )
 
 // connectPath is the runner tunnel endpoint on the control plane (a distinct
@@ -91,5 +92,6 @@ func authHeader(cfg Config) http.Header {
 	h.Set("X-Runner-OS", runtime.GOOS)
 	h.Set("X-Runner-Arch", runtime.GOARCH)
 	h.Set("X-Runner-Version", cfg.Version)
+	h.Set(proto.HeaderFeatures, proto.FeatureMultiPlatform)
 	return h
 }

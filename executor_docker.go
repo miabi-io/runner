@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,10 @@ type dockerExecutor struct {
 	git            string // git binary
 	workRoot       string // parent dir for per-job workspaces
 	defaultBuilder string // CNB builder used when a buildpack build supplies none
+	// buildxConfig holds buildx's builder state. Kept apart from the per-job DOCKER_CONFIG, which is where
+	// buildx would otherwise look, so a builder created by one job is found by the next.
+	buildxConfig string
+	readDigest   func(metaFile string) (string, error) // injectable for tests
 }
 
 func newDockerExecutor() *dockerExecutor {
@@ -36,7 +41,11 @@ func newDockerExecutor() *dockerExecutor {
 	if builder == "" {
 		builder = defaultBuilder
 	}
-	return &dockerExecutor{cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: buildsDir(), defaultBuilder: builder}
+	root := buildsDir()
+	return &dockerExecutor{
+		cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: root, defaultBuilder: builder,
+		buildxConfig: filepath.Join(root, ".buildx"), readDigest: readImageDigest,
+	}
 }
 
 // Begin creates the job workspace, checks out the source at the job's commit (if
@@ -199,6 +208,9 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 
 	switch resolveBuildMethod(r.workdir, step.Build) {
 	case "buildpack":
+		if len(platforms(step.Build)) > 0 {
+			return StepResult{}, errors.New("buildpack builds produce the runner's own platform only; build for several platforms from a Dockerfile")
+		}
 		builder := ""
 		if step.Build != nil {
 			builder = strings.TrimSpace(step.Build.Builder)
@@ -214,6 +226,9 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 			return StepResult{Exit: code}, nil
 		}
 	default: // dockerfile
+		if len(platforms(step.Build)) > 0 {
+			return r.buildx(ctx, step, tag, log)
+		}
 		buildArgs := []string{"build", "-t", tag}
 		if noCache(step.Build) {
 			buildArgs = append(buildArgs, "--no-cache")
@@ -257,6 +272,98 @@ func (r *dockerJobRun) build(ctx context.Context, step proto.StepSpec, log func(
 	r.exportEnv("MIABI_IMAGE", tag)
 	r.exportEnv("MIABI_IMAGE_DIGEST", r.job.Repository+"@"+digest)
 	return StepResult{Digest: digest}, nil
+}
+
+// multiPlatformBuilder is the buildx builder a runner creates when its daemon cannot build for several
+// platforms itself.
+const multiPlatformBuilder = "miabi-runner"
+
+// buildx builds the step for its platforms and pushes one image carrying them all. The classic `docker build`
+// produces the daemon's own platform only, and pushing is part of the build: a multi-platform image cannot
+// be loaded into a daemon to be pushed afterwards.
+func (r *dockerJobRun) buildx(ctx context.Context, step proto.StepSpec, tag string, log func(string)) (StepResult, error) {
+	builder, err := r.multiPlatformBuilder(ctx, log)
+	if err != nil {
+		return StepResult{}, err
+	}
+	cdir, err := contextDir(r.workdir, step.Build)
+	if err != nil {
+		return StepResult{}, err
+	}
+	meta := filepath.Join(r.workdir, ".miabi-build-metadata.json")
+	args := []string{"buildx", "build"}
+	if builder != "" {
+		args = append(args, "--builder", builder)
+	}
+	args = append(args, "--platform", strings.Join(platforms(step.Build), ","), "-t", tag, "--push", "--metadata-file", meta)
+	if df := dockerfilePath(step.Build); df != "Dockerfile" {
+		args = append(args, "-f", df)
+	}
+	if noCache(step.Build) {
+		args = append(args, "--no-cache")
+	}
+	args = append(args, buildxCacheFlags(step.Build)...)
+	args = append(args, buildArgFlags(step.Build, "--build-arg", "")...)
+	rel := contextLabel(r.workdir, cdir)
+	args = append(args, rel)
+
+	warnEmulators(step.Build, log)
+	log("building " + tag + " (buildx, context " + rel + cacheNote(step.Build) + platformNote(step.Build) + ")")
+	name, cmdArgs := r.buildxCmd(args...)
+	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, cmdArgs...); err != nil {
+		return StepResult{}, fmt.Errorf("docker buildx build: %w", err)
+	} else if code != 0 {
+		return StepResult{Exit: code}, nil
+	}
+	digest, err := r.e.readDigest(meta)
+	if err != nil {
+		return StepResult{}, fmt.Errorf("read build digest: %w", err)
+	}
+	log("pushed digest " + digest)
+	r.exportEnv("MIABI_IMAGE", tag)
+	r.exportEnv("MIABI_IMAGE_DIGEST", r.job.Repository+"@"+digest)
+	return StepResult{Digest: digest}, nil
+}
+
+// multiPlatformBuilder picks the buildx builder: none (the daemon's own) when the daemon uses the containerd
+// image store, which builds for several platforms and keeps the daemon's registry settings; otherwise a
+// docker-container builder, created once and reused.
+func (r *dockerJobRun) multiPlatformBuilder(ctx context.Context, log func(string)) (string, error) {
+	if out, err := r.e.cmd.capture(ctx, "", r.e.docker, "info", "--format", "{{json .DriverStatus}}"); err == nil &&
+		strings.Contains(out, "io.containerd.snapshotter") {
+		return "", nil
+	}
+	inspect := func() error {
+		name, args := r.buildxCmd("buildx", "inspect", multiPlatformBuilder)
+		_, err := r.e.cmd.capture(ctx, "", name, args...)
+		return err
+	}
+	if inspect() == nil {
+		return multiPlatformBuilder, nil
+	}
+	log("creating the " + multiPlatformBuilder + " buildx builder (the daemon cannot build for several platforms itself)")
+	name, args := r.buildxCmd("buildx", "create", "--name", multiPlatformBuilder, "--driver", "docker-container")
+	if code, err := r.e.cmd.run(ctx, r.workdir, nil, log, name, args...); err != nil || code != 0 {
+		// A concurrent job may have created it first.
+		if inspect() == nil {
+			return multiPlatformBuilder, nil
+		}
+		if err == nil {
+			err = fmt.Errorf("exit %d", code)
+		}
+		return "", fmt.Errorf("create buildx builder: %w", err)
+	}
+	return multiPlatformBuilder, nil
+}
+
+// buildxCmd is authCmd for buildx: the per-job DOCKER_CONFIG for credentials, plus a BUILDX_CONFIG that
+// outlives the job.
+func (r *dockerJobRun) buildxCmd(args ...string) (string, []string) {
+	env := []string{"BUILDX_CONFIG=" + r.e.buildxConfig}
+	if r.cfgDir != "" {
+		env = append(env, "DOCKER_CONFIG="+r.cfgDir)
+	}
+	return "env", append(append(env, r.e.docker), args...)
 }
 
 // container runs a custom step image with the workspace mounted at /workspace

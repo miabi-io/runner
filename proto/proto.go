@@ -93,7 +93,18 @@ type BuildConfig struct {
 	// CacheTo is the registry ref this build writes its cache to. Separate from CacheFrom so a branch
 	// build can read the trunk's cache without ever writing layers into one a trunk build would trust.
 	CacheTo string `json:"cache_to,omitempty"`
+	// Platforms are the OS/architecture pairs to build for, e.g. "linux/amd64" and "linux/arm64". Several
+	// push one multi-platform image whose digest names the index; empty builds for the runner's own
+	// platform. Only a runner advertising FeatureMultiPlatform honours it: an older one ignores the field.
+	Platforms []string `json:"platforms,omitempty"`
 }
+
+// HeaderFeatures carries the comma-separated features a runner supports when it connects, so the
+// control plane schedules a job only on a runner that can carry it out.
+const HeaderFeatures = "X-Runner-Features"
+
+// FeatureMultiPlatform means the runner honours BuildConfig.Platforms.
+const FeatureMultiPlatform = "multi-platform"
 
 // FrameType is the kind of report a runner sends back.
 type FrameType string
