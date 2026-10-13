@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jkaninda/logger"
 	"github.com/miabi-io/runner/proto"
 )
 
@@ -34,6 +35,7 @@ type dockerExecutor struct {
 	// buildx would otherwise look, so a builder created by one job is found by the next.
 	buildxConfig string
 	readDigest   func(metaFile string) (string, error) // injectable for tests
+	hostPaths    *hostPathResolver                     // nil passes workspace paths to docker unchanged
 }
 
 func newDockerExecutor() *dockerExecutor {
@@ -42,9 +44,26 @@ func newDockerExecutor() *dockerExecutor {
 		builder = defaultBuilder
 	}
 	root := buildsDir()
+	cmd := execCommander{}
 	return &dockerExecutor{
-		cmd: execCommander{}, docker: "docker", pack: "pack", git: "git", workRoot: root, defaultBuilder: builder,
+		cmd: cmd, docker: "docker", pack: "pack", git: "git", workRoot: root, defaultBuilder: builder,
 		buildxConfig: filepath.Join(root, ".buildx"), readDigest: readImageDigest,
+		hostPaths: newHostPathResolver(cmd, "docker"),
+	}
+}
+
+// hostPath returns path as the docker daemon sees it.
+func (e *dockerExecutor) hostPath(path string) (string, error) {
+	if e.hostPaths == nil {
+		return path, nil
+	}
+	return e.hostPaths.resolve(path)
+}
+
+// checkHostPaths warns at startup when container steps cannot mount the workspace.
+func (e *dockerExecutor) checkHostPaths() {
+	if _, err := e.hostPath(e.workRoot); err != nil {
+		logger.Warn("container steps will fail", "error", err)
 	}
 }
 
@@ -372,7 +391,11 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	if step.Image == "" {
 		return StepResult{}, fmt.Errorf("step %q has no image to run", step.Name)
 	}
-	args := []string{"run", "--rm", "-w", "/workspace", "-v", r.workdir + ":/workspace"}
+	workspace, err := r.e.hostPath(r.workdir)
+	if err != nil {
+		return StepResult{}, err
+	}
+	args := []string{"run", "--rm", "-w", "/workspace", "-v", workspace + ":/workspace"}
 
 	// `-e NAME` (no value) tells docker to take it from our own environment, so a
 	// resolved secret never lands in a command line every local user can read.
@@ -391,7 +414,11 @@ func (r *dockerJobRun) container(ctx context.Context, step proto.StepSpec, log f
 	// Mount the shared env file and point $MIABI_ENV at it so this step can export
 	// its own vars to later steps (`echo KEY=VALUE >> $MIABI_ENV`).
 	if r.envFile != "" {
-		args = append(args, "-v", r.envFile+":/miabi/env", "-e", "MIABI_ENV=/miabi/env")
+		envFile, err := r.e.hostPath(r.envFile)
+		if err != nil {
+			return StepResult{}, err
+		}
+		args = append(args, "-v", envFile+":/miabi/env", "-e", "MIABI_ENV=/miabi/env")
 	}
 	// A `run:` command overrides the image ENTRYPOINT. With no
 	// command the image's own entrypoint/CMD runs unchanged.

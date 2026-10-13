@@ -51,7 +51,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Builder == "buildkit" {
 		exec = newBuildkitExecutor()
 	} else {
-		exec = newDockerExecutor()
+		docker := newDockerExecutor()
+		docker.checkHostPaths()
+		exec = docker
 	}
 	opts := wstunnel.ClientOptions{
 		URL:      wstunnel.URL(cfg.ControlURL, connectPath),
