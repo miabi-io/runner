@@ -71,3 +71,15 @@ jobs:
             miabi/runner:${{ env.VERSION }}
             ghcr.io/miabi-io/runner:latest
             ghcr.io/miabi-io/runner:${{ env.VERSION }}
+
+  publish-version:
+    runs-on: ubuntu-latest
+    needs: [goreleaser, image]
+    permissions:
+      contents: read
+    steps:
+      - uses: miabi-io/versions@main
+        with:
+          component: runner
+          version: ${{ github.ref_name }}
+          token: ${{ secrets.VERSIONS_TOKEN }}
