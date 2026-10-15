@@ -92,4 +92,4 @@ multi-platform build only to a runner that can carry it out).
 
 
 
-Licensed under Apache-2.0.
+Licensed under AGPL-3.0-or-later. See [LICENSE](LICENSE).
