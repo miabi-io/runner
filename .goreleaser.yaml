@@ -10,8 +10,7 @@ builds:
     binary: miabi-runner
     env:
       - CGO_ENABLED=0
-    # A build runner talks to a local Docker/BuildKit daemon, so Linux is the
-    # primary target; darwin is included for local development on Docker Desktop.
+    # Linux is the primary target; darwin is for local development on Docker Desktop.
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     flags:

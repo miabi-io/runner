@@ -17,13 +17,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package proto is the job/report wire contract between the Miabi control plane
-// and a runner, carried over one yamux stream (opened by the control plane via
-// the shared wstunnel transport). The control plane writes exactly one JobSpec,
-// then reads a sequence of report Frames the runner emits as it executes; both
-// are newline-delimited JSON. Keeping the contract in the runner module (which
-// the control plane imports) means a single source of truth and independent
-// versioning, mirroring how the transport lives in github.com/miabi-io/wstunnel.
+// Package proto is the newline-delimited JSON job/report contract between the control plane and a runner.
 package proto
 
 import (
@@ -32,9 +26,7 @@ import (
 	"time"
 )
 
-// JobSpec is the control plane's request to execute one pipeline run on a runner.
-// It carries the predefined, non-secret build context (the MIABI_* variables);
-// secrets and the ready-to-use registry login are injected separately per job.
+// JobSpec carries only non-secret build context; secrets and registry login are injected separately.
 type JobSpec struct {
 	RunID       uint   `json:"run_id"`
 	RunNumber   int    `json:"run_number"`
@@ -46,10 +38,7 @@ type JobSpec struct {
 	Commit      string `json:"commit,omitempty"`
 	Ref         string `json:"ref,omitempty"`
 	Branch      string `json:"branch,omitempty"`
-	// SourceURL is the git remote the runner clones and checks out at Commit into
-	// the workdir before running steps. Empty means the workspace is pre-populated
-	// (or the job runs no build). Any credential is carried in the URL or the
-	// injected job env, never logged.
+	// SourceURL is cloned at Commit; empty means a pre-populated workspace. Any embedded credential is never logged.
 	SourceURL  string     `json:"source_url,omitempty"`
 	Repository string     `json:"repository,omitempty"` // fully-qualified image repo to push to
 	Registry   string     `json:"registry,omitempty"`   // registry host
@@ -66,26 +55,18 @@ type StepSpec struct {
 	Image   string   `json:"image,omitempty"` // container image for a custom step
 	Env     []string `json:"env,omitempty"`   // KEY=VALUE, step-scoped
 	Run     []string `json:"run,omitempty"`   // command for a container step
-	// ContinueOnError keeps the run going when this step fails (the step is still
-	// reported failed, the run still succeeds)
+	// ContinueOnError reports the step failed but lets the run continue and succeed.
 	ContinueOnError bool `json:"continue_on_error,omitempty"`
-	// Build configures a build step (Uses=="build"): how to turn the checked-out
-	// source into an image. Nil (or an empty Method) means auto-detect — a root
-	// Dockerfile selects a Dockerfile build, otherwise Cloud Native Buildpacks.
+	// Build configures a build step; nil or empty Method auto-detects Dockerfile vs buildpacks.
 	Build *BuildConfig `json:"build,omitempty"`
 }
 
 type BuildConfig struct {
 	// Method is "" | "auto" | "dockerfile" | "buildpack" (empty/auto auto-detects).
 	Method string `json:"method,omitempty"`
-	// Dockerfile is the Dockerfile path for the dockerfile method (default "Dockerfile"),
-	// relative to the checked-out source root — NOT to Context, matching
-	// `docker build -f <dockerfile> <context>`, where the two are independent.
+	// Dockerfile is relative to the source root, not to Context, like docker build -f.
 	Dockerfile string `json:"dockerfile,omitempty"`
-	// Context is the build context directory, relative to the checked-out source
-	// root (default: the root itself). A monorepo commonly keeps its Dockerfile in
-	// docker/ while still building from the root, so this must be settable apart
-	// from Dockerfile.
+	// Context is relative to the source root, settable apart from Dockerfile for monorepos.
 	Context string `json:"context,omitempty"`
 	// Builder is the CNB builder image for the buildpack method (empty = runner default).
 	Builder string `json:"builder,omitempty"`
@@ -93,28 +74,19 @@ type BuildConfig struct {
 	Buildpacks []string `json:"buildpacks,omitempty"`
 	// BuildEnv is build-time env for the buildpack method (pack --env KEY=VALUE).
 	BuildEnv map[string]string `json:"build_env,omitempty"`
-	// BuildArgs are Dockerfile ARG values for the dockerfile method
-	// (docker build --build-arg KEY=VALUE). The buildpack equivalent is BuildEnv.
-	//
-	// NOT for secrets: a build arg is recorded in the image's own history, so
-	// anyone who can pull the image can read it back. Pass credentials through the
-	// job's env instead.
+	// BuildArgs are recorded in image history and readable by anyone who can pull, so never use them for secrets.
 	BuildArgs map[string]string `json:"build_args,omitempty"`
 	// NoCache builds every layer from scratch, ignoring any cache the builder
 	NoCache bool `json:"no_cache,omitempty"`
 	// CacheFrom are registry refs to seed the layer cache from. Ignored when NoCache is set.
 	CacheFrom []string `json:"cache_from,omitempty"`
-	// CacheTo is the registry ref this build writes its cache to. Separate from CacheFrom so a branch
-	// build can read the trunk's cache without ever writing layers into one a trunk build would trust.
+	// CacheTo is separate from CacheFrom so a branch build never writes into a cache a trunk build trusts.
 	CacheTo string `json:"cache_to,omitempty"`
-	// Platforms are the OS/architecture pairs to build for, e.g. "linux/amd64" and "linux/arm64". Several
-	// push one multi-platform image whose digest names the index; empty builds for the runner's own
-	// platform. Only a runner advertising FeatureMultiPlatform honours it: an older one ignores the field.
+	// Platforms builds one multi-platform image; only a runner advertising FeatureMultiPlatform honours it.
 	Platforms []string `json:"platforms,omitempty"`
 }
 
-// HeaderFeatures carries the comma-separated features a runner supports when it connects, so the
-// control plane schedules a job only on a runner that can carry it out.
+// HeaderFeatures lets the control plane schedule a job only on a runner that can carry it out.
 const HeaderFeatures = "X-Runner-Features"
 
 // FeatureMultiPlatform means the runner honours BuildConfig.Platforms.
@@ -131,8 +103,6 @@ const (
 	FrameError  FrameType = "error"  // a runner-side failure (Error)
 )
 
-// Frame is one report from the runner to the control plane. The meaningful
-// payload fields depend on Type (see FrameType).
 type Frame struct {
 	Type   FrameType `json:"type"`
 	Step   int       `json:"step,omitempty"`   // step ordinal for log/step/result
@@ -156,9 +126,7 @@ func ReadJob(r io.Reader) (JobSpec, error) {
 // FrameWriter emits report frames back to the control plane over the stream.
 type FrameWriter struct{ enc *json.Encoder }
 
-// NewFrameWriter wraps the stream's write side. All emit helpers are safe to
-// call from a single goroutine (the job runner); the control plane decodes the
-// frames in order.
+// NewFrameWriter is not concurrency-safe: write from one goroutine so the control plane decodes frames in order.
 func NewFrameWriter(w io.Writer) *FrameWriter { return &FrameWriter{enc: json.NewEncoder(w)} }
 
 func (fw *FrameWriter) emit(f Frame) error { return fw.enc.Encode(f) }

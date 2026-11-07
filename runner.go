@@ -31,8 +31,7 @@ import (
 	"github.com/miabi-io/runner/proto"
 )
 
-// connectPath is the runner tunnel endpoint on the control plane (a distinct
-// scope from the node agent's /api/v1/agent/connect).
+// Distinct scope from the node agent's /api/v1/agent/connect.
 const connectPath = "/api/v1/runner/connect"
 
 // Config configures the runner runtime.
@@ -44,10 +43,7 @@ type Config struct {
 	Builder    string // build backend: "docker" (default) or "buildkit" (rootless)
 }
 
-// Run connects to the control plane and stays registered until ctx is
-// cancelled, reconnecting with exponential backoff. The whole tunnel transport
-// (WebSocket + yamux, framing, keepalive) is the shared wstunnel module, so the
-// runner and control plane are guaranteed to speak the same wire protocol.
+// Run stays registered until ctx is cancelled, reconnecting with exponential backoff.
 func Run(ctx context.Context, cfg Config) error {
 	var exec Executor
 	if cfg.Builder == "buildkit" {
@@ -80,16 +76,12 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 }
 
-// serveJob runs one job stream to completion and closes it. runJob reports the
-// outcome to the control plane and logs it, so there is nothing to add here.
 func serveJob(ctx context.Context, stream net.Conn, exec Executor) {
 	defer func() { _ = stream.Close() }()
 	_ = runJob(ctx, stream, exec)
 }
 
-// authHeader carries the registration token and the runner's self-reported
-// platform facts on the WebSocket handshake, which the control plane records
-// (and uses for label/arch scheduling).
+// The control plane records these platform facts and uses them for label/arch scheduling.
 func authHeader(cfg Config) http.Header {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+cfg.Token)

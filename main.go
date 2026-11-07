@@ -17,22 +17,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command miabi-runner is the machine-side runtime for Miabi's dedicated build &
-// pipeline execution. It dials the control plane over an outbound WebSocket
-// (NAT-friendly, no inbound ports) authenticated by its registration token, and
-// appears online. Unlike the node agent it exposes no Docker socket to the
-// control plane — a runner uses its OWN local Docker/BuildKit daemon; the tunnel
-// exists so the control plane can lease build jobs to it and stream logs/status
-// back. Job leasing lands in a later phase; this phase registers and heartbeats.
-//
-// Configuration (environment):
-//
-//	MIABI_CONTROL_URL                  control plane base URL, e.g. https://miabi.example.com
-//	                                       (falls back to MIABI_API_URL)
-//	MIABI_RUNNER_TOKEN                 registration token issued when the runner was added (mbr_...)
-//	MIABI_RUNNER_INSECURE_SKIP_VERIFY skip TLS verification of the control plane (default false)
-//	MIABI_RUNNER_BUILDER              build backend: "docker" (default) or "buildkit" (rootless)
-//	MIABI_RUNNER_BUILDS_DIR           parent dir for per-job workspaces, default: OS temp dir.
+// Command miabi-runner dials the control plane and runs leased build jobs on its own local Docker/BuildKit daemon.
 package main
 
 import (

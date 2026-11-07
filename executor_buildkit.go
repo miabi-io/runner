@@ -30,12 +30,7 @@ import (
 	"github.com/miabi-io/runner/proto"
 )
 
-// buildkitExecutor builds rootless and daemonless with BuildKit
-// (buildctl-daemonless.sh): a build step builds the checked-out Dockerfile and
-// pushes it straight to the registry by digest — no Docker daemon, no
-// /var/run/docker.sock. This is the P4 backend that removes the privilege
-// surface; selected with MIABI_RUNNER_BUILDER=buildkit. Container steps need a
-// container runtime and are not supported here (use the docker backend).
+// buildkitExecutor builds rootless and daemonless; container steps need a runtime and are unsupported here.
 type buildkitExecutor struct {
 	cmd        commander
 	buildctl   string // buildctl-daemonless.sh
@@ -54,9 +49,7 @@ func newBuildkitExecutor() *buildkitExecutor {
 	}
 }
 
-// Begin creates the workspace, checks out source, and writes a docker
-// config.json with the registry login so BuildKit's push authenticates with no
-// login step (the plan's pre-written $DOCKER_CONFIG/config.json).
+// The docker config.json lets BuildKit's push authenticate with no login step.
 func (e *buildkitExecutor) Begin(ctx context.Context, job proto.JobSpec, log func(string)) (JobRun, error) {
 	workdir, err := os.MkdirTemp(e.workRoot, fmt.Sprintf("miabi-run-%d-", job.RunID))
 	if err != nil {
@@ -113,9 +106,7 @@ func (r *buildkitJobRun) Step(ctx context.Context, step proto.StepSpec, log func
 	}
 }
 
-// build runs a rootless BuildKit build that pushes the image and writes a
-// metadata file, from which the pushed digest is read. BuildKit is daemonless
-// and Dockerfile-only here; a buildpack build needs the docker backend.
+// BuildKit here is Dockerfile-only; a buildpack build needs the docker backend.
 func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log func(string)) (StepResult, error) {
 	if r.job.Repository == "" {
 		return StepResult{}, errors.New("build step requires MIABI_IMAGE_REPOSITORY (no push target)")
@@ -134,10 +125,7 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 		"build",
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + cdir,
-		// The dockerfile local stays the source root, and `filename` is resolved
-		// against it — so a Dockerfile outside the context still builds, matching
-		// `docker build -f` semantics rather than BuildKit's default of expecting
-		// the Dockerfile inside the context.
+		// filename resolves against the source root, so a Dockerfile outside the context builds, like docker build -f.
 		"--local", "dockerfile=" + r.workdir,
 		"--opt", "filename=" + dockerfilePath(step.Build),
 		"--output", fmt.Sprintf("type=image,name=%s,push=true", ref),
@@ -146,8 +134,7 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	if noCache(step.Build) {
 		buildArgs = append(buildArgs, "--no-cache")
 	}
-	// A cold build still exports: it repopulates the ref the next build reads, which is the whole
-	// point of rotating the cache rather than only skipping it.
+	// A cold build still exports: it repopulates the ref the next build reads.
 	buildArgs = append(buildArgs, cacheFlags(step.Build)...)
 	// buildctl spells a Dockerfile ARG as `--opt build-arg:KEY=VALUE`.
 	buildArgs = append(buildArgs, buildArgFlags(step.Build, "--opt", "build-arg:")...)
@@ -173,8 +160,6 @@ func (r *buildkitJobRun) build(ctx context.Context, step proto.StepSpec, log fun
 	return StepResult{Digest: digest}, nil
 }
 
-// buildctlCmd prepends `env DOCKER_CONFIG=<dir>` when a registry credential was
-// written, so buildctl finds the push auth.
 func (r *buildkitJobRun) buildctlCmd(buildArgs []string) (string, []string) {
 	if r.cfgDir != "" {
 		return "env", append([]string{"DOCKER_CONFIG=" + r.cfgDir, r.e.buildctl}, buildArgs...)

@@ -8,8 +8,7 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /miabi-runner .
 
-# Cloud Native Buildpacks `pack` CLI, so the runner can build buildpack apps (not
-# just Dockerfiles). pack publishes per-arch linux tarballs.
+# pack CLI lets the runner build buildpack apps, not just Dockerfiles.
 FROM alpine:3.21 AS pack
 ARG PACK_VERSION=0.40.7
 ARG TARGETARCH

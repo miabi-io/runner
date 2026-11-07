@@ -42,9 +42,7 @@ type hostMount struct {
 	Destination string `json:"Destination"`
 }
 
-// hostPathResolver translates a path inside the runner to the path the docker
-// daemon sees. A containerised runner drives the host daemon through its socket,
-// so a `-v` source is resolved on the host, not in the runner's filesystem.
+// A containerised runner drives the host daemon, so a -v source is resolved on the host.
 type hostPathResolver struct {
 	cmd    commander
 	docker string
@@ -58,8 +56,7 @@ func newHostPathResolver(cmd commander, docker string) *hostPathResolver {
 	return &hostPathResolver{cmd: cmd, docker: docker, selfID: selfContainerID}
 }
 
-// resolve returns path as the docker daemon sees it, or an error when path lives
-// in the runner container's own filesystem, where no step container can mount it.
+// Errors when path lives in the runner container's own filesystem, where no step can mount it.
 func (h *hostPathResolver) resolve(path string) (string, error) {
 	h.once.Do(h.load)
 	if h.mounts == nil {
@@ -77,8 +74,7 @@ func (h *hostPathResolver) load() {
 	defer cancel()
 	out, err := h.cmd.capture(ctx, "", h.docker, "inspect", "--format", "{{json .Mounts}}", id)
 	if err != nil {
-		// The daemon does not know this container (remote DOCKER_HOST, a dind
-		// sidecar), so its paths may well match ours: pass them through.
+		// The daemon does not know this container (remote DOCKER_HOST, dind), so its paths may match ours.
 		logger.Warn("cannot inspect the runner container; passing workspace paths to docker unchanged", "container", id, "error", err)
 		return
 	}
@@ -136,8 +132,6 @@ func selfContainerID() string {
 
 var containerIDPattern = regexp.MustCompile(`/containers/([0-9a-f]{64})/`)
 
-// containerIDFromMountinfo finds the container ID in the paths of the
-// hostname/hosts/resolv.conf files docker bind-mounts into every container.
 func containerIDFromMountinfo(r io.Reader) string {
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
