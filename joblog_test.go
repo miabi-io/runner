@@ -55,9 +55,7 @@ func TestTookIsReadable(t *testing.T) {
 	}
 }
 
-// jobFields is the base every line appends to. If `with` handed back a slice
-// sharing its backing array, two concurrent jobs would overwrite each other's
-// fields — and the corruption would only show under load.
+// A slice aliasing the base would let concurrent jobs overwrite each other's fields, only visible under load.
 func TestWithDoesNotAliasTheBase(t *testing.T) {
 	base := jobFields(proto.JobSpec{RunID: 1, Pipeline: "ci", Workspace: "acme"})
 	a := with(base, "step", 1)
@@ -101,8 +99,6 @@ func sprint(v any) string {
 	}
 }
 
-// captureLogs points the global logger at a file for the duration of one test
-// and returns everything written to it.
 func captureLogs(t *testing.T, run func()) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "runner.log")
@@ -159,8 +155,7 @@ func TestFailedJobNamesTheStep(t *testing.T) {
 	}
 }
 
-// A run that finished green after a tolerated failure is not the same thing as a
-// clean run, and the log should not imply it was.
+// A green run after a tolerated failure is not a clean run, and the log should not imply it was.
 func TestToleratedFailureIsReported(t *testing.T) {
 	job := loggedJob()
 	job.Steps[0].ContinueOnError = true
@@ -174,8 +169,7 @@ func TestToleratedFailureIsReported(t *testing.T) {
 	}
 }
 
-// The whole point of the field discipline: nothing a job carries as a credential
-// may reach the runner's log.
+// Nothing a job carries as a credential may reach the runner's log.
 func TestJobLogsCarryNoCredentials(t *testing.T) {
 	out := captureLogs(t, func() {
 		drive(t, loggedJob(), fakeExecutor{results: map[int]StepResult{1: {Exit: 2}}})

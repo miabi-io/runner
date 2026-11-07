@@ -46,8 +46,6 @@ func beginDocker(t *testing.T, fc *fakeCommander) JobRun {
 	return run
 }
 
-// A daemon without the containerd image store cannot build for several platforms, so the runner builds with
-// a docker-container buildx builder it creates once, and pushes as part of the build.
 func TestDockerMultiPlatformCreatesABuilder(t *testing.T) {
 	fc := &fakeCommander{answer: func(cmd string) (string, error) {
 		switch {

@@ -37,9 +37,7 @@ import (
 	"github.com/miabi-io/runner/proto"
 )
 
-// defaultBuilder is the CNB builder image used when a buildpack build supplies
-// none (the control plane normally resolves and sends one). Overridable via
-// MIABI_RUNNER_DEFAULT_BUILDER.
+// Used when a buildpack build supplies no builder; overridable via MIABI_RUNNER_DEFAULT_BUILDER.
 const defaultBuilder = "paketobuildpacks/builder-jammy-base"
 
 // buildsDir is the parent directory for per-job workspaces
@@ -55,10 +53,7 @@ func buildsDir() string {
 	return dir
 }
 
-// resolveBuildMethod decides how a build step builds. No build config keeps the
-// historical Dockerfile behavior; an explicit method is honored; "auto"/"" (with
-// a config present) inspects the tree — a root Dockerfile selects Dockerfile,
-// otherwise Cloud Native Buildpacks.
+// No build config keeps Dockerfile behavior; "auto" picks Dockerfile if one is at the root, else buildpacks.
 func resolveBuildMethod(dir string, cfg *proto.BuildConfig) string {
 	if cfg == nil {
 		return "dockerfile"
@@ -84,14 +79,7 @@ func dockerfilePath(cfg *proto.BuildConfig) string {
 	return "Dockerfile"
 }
 
-// contextDir resolves a build step's context to an absolute path under workdir.
-//
-// The control plane already rejects absolute paths and `..` escapes, but this is
-// the process that actually runs the build: a runner is shared across a
-// workspace's pipelines, and a pipeline file is editable by anyone who can push a
-// branch. Re-checking here means a control plane that ever stops validating —
-// or a runner driven by something else — cannot be talked into mounting the
-// runner's own filesystem as a build context.
+// Re-checks escapes here: pipeline files are editable by anyone who can push, so don't trust the control plane alone.
 func contextDir(workdir string, cfg *proto.BuildConfig) (string, error) {
 	if cfg == nil || strings.TrimSpace(cfg.Context) == "" {
 		return workdir, nil
@@ -115,8 +103,6 @@ func contextDir(workdir string, cfg *proto.BuildConfig) (string, error) {
 	return abs, nil
 }
 
-// sortedKeys returns a map's keys in order, so every argv this package builds is
-// deterministic and therefore testable.
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -126,9 +112,7 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// buildArgFlags renders Dockerfile ARG values as repeated flags. flag is the
-// spelling the backend wants: "--build-arg" with the docker CLI, "--opt" with
-// buildctl (whose values carry a "build-arg:" prefix, supplied by the caller).
+// buildctl values need the "build-arg:" prefix, supplied by the caller.
 func buildArgFlags(cfg *proto.BuildConfig, flag, prefix string) []string {
 	if cfg == nil || len(cfg.BuildArgs) == 0 {
 		return nil
@@ -140,15 +124,10 @@ func buildArgFlags(cfg *proto.BuildConfig, flag, prefix string) []string {
 	return out
 }
 
-// noCache reports whether this build must ignore every cached layer. A nil
-// config means the platform sent no build settings at all, which is the cached
-// default.
 func noCache(cfg *proto.BuildConfig) bool {
 	return cfg != nil && cfg.NoCache
 }
 
-// cacheNote is the log suffix that tells the operator this build ignored the
-// cache.
 func cacheNote(cfg *proto.BuildConfig) string {
 	if noCache(cfg) {
 		return ", no cache"
@@ -156,8 +135,7 @@ func cacheNote(cfg *proto.BuildConfig) string {
 	return ""
 }
 
-// cacheFlags renders the registry layer cache as buildctl flags. Imports are skipped for a cold
-// build; the export is not, so the rebuilt layers land in the cache the next build reads.
+// Imports are skipped for a cold build; the export is not, so the next build reads the rebuilt layers.
 func cacheFlags(cfg *proto.BuildConfig) []string {
 	if cfg == nil {
 		return nil
@@ -170,8 +148,7 @@ func cacheFlags(cfg *proto.BuildConfig) []string {
 			}
 		}
 	}
-	// mode=max caches intermediate stages too — the expensive half of a multi-stage build is the
-	// stages the final image never carries.
+	// mode=max caches intermediate stages too, the expensive half of a multi-stage build.
 	if strings.TrimSpace(cfg.CacheTo) != "" {
 		out = append(out, "--export-cache", "type=registry,ref="+cfg.CacheTo+",mode=max")
 	}
@@ -208,9 +185,7 @@ var qemuArch = map[string]string{
 	"ppc64le": "ppc64le", "s390x": "s390x", "riscv64": "riscv64",
 }
 
-// missingEmulators lists the platforms whose RUN instructions cannot execute here: another architecture
-// than the runner's with no QEMU handler registered. Such a build still succeeds when the Dockerfile
-// cross-compiles on $BUILDPLATFORM, so this warns rather than refuses.
+// A build still succeeds when the Dockerfile cross-compiles on $BUILDPLATFORM, so this warns rather than refuses.
 func missingEmulators(ps []string, native string) []string {
 	var out []string
 	for _, p := range ps {
@@ -238,8 +213,7 @@ func warnEmulators(cfg *proto.BuildConfig, log func(string)) {
 	}
 }
 
-// readImageDigest reads the pushed image digest from a build --metadata-file. For a multi-platform build it
-// is the index's digest, which a node of any listed platform deploys by.
+// For a multi-platform build this is the index digest, which a node of any listed platform deploys by.
 func readImageDigest(metaFile string) (string, error) {
 	b, err := os.ReadFile(metaFile)
 	if err != nil {
@@ -289,15 +263,11 @@ func hasFile(dir, name string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// packArgs assembles the `pack build` argv for a buildpack build. Env keys are
-// sorted for a deterministic, testable argv.
 func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
 	args := []string{
 		"build", tag,
 		"--path", ".",
 		"--builder", builder,
-		// inherit: use the runner's Docker host; trust-builder: skip the prompt for
-		// a known builder; if-not-present: reuse a cached builder image.
 		"--docker-host", "inherit",
 		"--trust-builder",
 		"--pull-policy", "if-not-present",
@@ -320,12 +290,8 @@ func packArgs(tag, builder string, cfg *proto.BuildConfig) []string {
 	return args
 }
 
-// commander runs external commands; abstracted so the executors are unit-testable
-// without a real docker/buildkit/git.
 type commander interface {
-	// run executes name+args in dir with env added to the child's environment,
-	// streaming combined output to log line by line, and returns the exit code. A
-	// non-zero exit is (code, nil); a failure to start is (-1, err).
+	// A non-zero exit is (code, nil); a failure to start is (-1, err).
 	run(ctx context.Context, dir string, env []string, log func(string), name string, args ...string) (int, error)
 	// capture runs a command and returns its trimmed stdout.
 	capture(ctx context.Context, dir, name string, args ...string) (string, error)
@@ -333,8 +299,7 @@ type commander interface {
 	loginStdin(ctx context.Context, secret, name string, args ...string) error
 }
 
-// gitCheckout clones a job's source and checks out its commit into workdir. The
-// source URL is never logged (it may embed a credential).
+// The source URL is never logged: it may embed a credential.
 func gitCheckout(ctx context.Context, cmd commander, gitBin, workdir string, job proto.JobSpec, log func(string)) error {
 	log("cloning source")
 	if code, err := cmd.run(ctx, "", nil, log, gitBin, "clone", job.SourceURL, workdir); err != nil || code != 0 {
@@ -348,9 +313,6 @@ func gitCheckout(ctx context.Context, cmd commander, gitBin, workdir string, job
 	return nil
 }
 
-// writeDockerConfig writes a docker config.json into dir with a registry login,
-// so daemonless builders (buildkit) authenticate their push with no login step.
-// Returns the DOCKER_CONFIG dir. A blank token writes nothing (anonymous).
 func writeDockerConfig(dir, registry, user, token string) error {
 	if token == "" || registry == "" {
 		return nil

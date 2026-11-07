@@ -53,8 +53,6 @@ func (f fakeRun) Step(_ context.Context, step proto.StepSpec, log func(string)) 
 	return f.results[step.Ordinal], nil
 }
 
-// drive writes job to one end of a pipe, runs runJob on the other, and returns
-// the frames the runner emitted.
 func drive(t *testing.T, job proto.JobSpec, exec Executor) []proto.Frame {
 	t.Helper()
 	cp, runner := net.Pipe()
@@ -94,8 +92,6 @@ func TestRunJobSuccess(t *testing.T) {
 	}
 	frames := drive(t, job, exec)
 
-	// Expect: step0 running, log, result(digest), step0 succeeded, step1 running,
-	// step1 succeeded, done succeeded.
 	last := frames[len(frames)-1]
 	if last.Type != proto.FrameDone || last.Status != statusSucceeded {
 		t.Fatalf("final frame = %+v, want done/succeeded", last)
@@ -144,8 +140,6 @@ func TestRunJobNonZeroExitFails(t *testing.T) {
 	}
 }
 
-// A continue-on-error step that fails is reported failed, but the run keeps going
-// and still succeeds — whether the step exited non-zero or errored outright.
 func TestRunJobContinueOnError(t *testing.T) {
 	for _, tc := range []struct {
 		name string

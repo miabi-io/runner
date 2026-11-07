@@ -31,19 +31,12 @@ type StepResult struct {
 	Digest string // image digest a build step pushed (sha256:…), empty otherwise
 }
 
-// Executor prepares a job and runs its steps on the runner's local container
-// backend. The concrete backend (docker CLI here; rootless BuildKit/Kaniko
-// later) sits behind this interface, so the job protocol and run loop never
-// change when the backend does.
+// Executor runs job steps on a local container backend, so the job protocol never changes with the backend.
 type Executor interface {
-	// Begin sets up the job — checkout source, registry login — and returns a
-	// JobRun to execute steps. An error fails the whole job. Setup output is
-	// streamed via log.
+	// Begin sets up the job (checkout, registry login); an error fails the whole job.
 	Begin(ctx context.Context, job proto.JobSpec, log func(line string)) (JobRun, error)
 }
 
-// JobRun executes the steps of one prepared job and releases its workspace on
-// Close.
 type JobRun interface {
 	Step(ctx context.Context, step proto.StepSpec, log func(line string)) (StepResult, error)
 	Close()

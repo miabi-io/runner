@@ -90,8 +90,7 @@ func TestHostPathResolverUninspectableContainer(t *testing.T) {
 	}
 }
 
-// A runner enrolled without a builds-dir mount used to run container steps in an
-// empty /workspace; the step must fail instead, naming the fix.
+// Without a builds-dir mount the step must fail naming the fix, not run in an empty /workspace.
 func TestContainerStepWorkspaceOutsideMounts(t *testing.T) {
 	f := &fakeCommander{answer: func(string) (string, error) {
 		return `[{"Type":"bind","Source":"/var/run/docker.sock","Destination":"/var/run/docker.sock"}]`, nil

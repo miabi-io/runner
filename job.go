@@ -28,21 +28,15 @@ import (
 	"github.com/miabi-io/runner/proto"
 )
 
-// Run/step status strings, matching the control plane's PipelineRunStatus so the
-// reported values map straight onto the run and its steps.
+// Must match the control plane's PipelineRunStatus values.
 const (
 	statusRunning   = "running"
 	statusSucceeded = "succeeded"
 	statusFailed    = "failed"
 )
 
-// jobLog is the step ordinal for job-level (setup/checkout) log lines that don't
-// belong to a specific step.
 const jobLog = -1
 
-// runJob reads the JobSpec that opens a job stream, prepares the job workspace,
-// executes each step in order, and streams report frames back over the same
-// stream, closing with a terminal Done (or Error) frame.
 func runJob(ctx context.Context, stream io.ReadWriter, exec Executor) error {
 	job, err := proto.ReadJob(stream)
 	if err != nil {

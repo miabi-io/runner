@@ -37,8 +37,6 @@ func newTestBuildkit(t *testing.T, cmd commander) *buildkitExecutor {
 	}
 }
 
-// A build runs buildctl with a push output + metadata file, authenticated via a
-// per-job DOCKER_CONFIG, and returns the digest read from the metadata.
 func TestBuildkitBuildPushesByDigest(t *testing.T) {
 	fc := &fakeCommander{}
 	e := newTestBuildkit(t, fc)
@@ -61,8 +59,6 @@ func TestBuildkitBuildPushesByDigest(t *testing.T) {
 	if res.Digest != "sha256:cafebabe" {
 		t.Errorf("digest = %q", res.Digest)
 	}
-	// buildctl invoked with a push output, the deploy-id (RunID) tag, and the
-	// docker config env for auth.
 	if !fc.called("buildctl-daemonless.sh build") {
 		t.Errorf("buildctl not invoked: %v", fc.calls)
 	}
@@ -77,8 +73,7 @@ func TestBuildkitBuildPushesByDigest(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bkr.cfgDir, "config.json")); err != nil {
 		t.Errorf("registry config.json not written: %v", err)
 	}
-	// …and it lives OUTSIDE the build context (workdir is sent as --local context),
-	// so a Dockerfile can't COPY the token out.
+	// The auth dir lives outside the build context, so a Dockerfile can't COPY the token out.
 	if strings.HasPrefix(bkr.cfgDir, bkr.workdir) {
 		t.Errorf("auth dir %q must not be inside the build context %q", bkr.cfgDir, bkr.workdir)
 	}
@@ -108,8 +103,6 @@ func TestReadImageDigest(t *testing.T) {
 	}
 }
 
-// The buildkit backend spells a cold build `buildctl build --no-cache`, and
-// leaves the cache in place when the step did not ask for one.
 func TestBuildkitNoCache(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -138,8 +131,7 @@ func TestBuildkitNoCache(t *testing.T) {
 	}
 }
 
-// Registry cache is what makes a bumped cache generation actually cold and the next build warm
-// again: imports are dropped for a cold build, but the export never is — it repopulates the ref.
+// Imports are dropped for a cold build, but the export never is: it repopulates the cache ref.
 func TestBuildkitRegistryCache(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

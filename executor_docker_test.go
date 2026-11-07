@@ -29,9 +29,6 @@ import (
 	"github.com/miabi-io/runner/proto"
 )
 
-// fakeCommander records invocations and returns scripted exit codes / output so
-// the executor's command construction and result handling are testable without a
-// real docker/git.
 type fakeCommander struct {
 	calls     []string
 	buildExit int
@@ -129,8 +126,7 @@ func TestBeginCheckoutAndAuth(t *testing.T) {
 	if dr.cfgDir == "" {
 		t.Fatal("expected a per-job DOCKER_CONFIG dir")
 	}
-	// The auth dir must live OUTSIDE the build context, so a Dockerfile can't COPY
-	// the token out of the build context.
+	// The auth dir must live outside the build context, so a Dockerfile can't COPY the token out.
 	if strings.HasPrefix(dr.cfgDir, dr.workdir) {
 		t.Errorf("auth dir %q must not be inside the build context %q", dr.cfgDir, dr.workdir)
 	}
@@ -143,9 +139,7 @@ func TestBeginCheckoutAndAuth(t *testing.T) {
 	}
 }
 
-// With a registry credential, build and push must run under the job's private
-// DOCKER_CONFIG (via an `env DOCKER_CONFIG=<dir>` prefix) so concurrent jobs never
-// share a global docker login.
+// Concurrent jobs must never share a global docker login.
 func TestBuildPushUsePerJobDockerConfig(t *testing.T) {
 	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
 	e := newTestExecutor(t, fc)
@@ -279,8 +273,7 @@ func TestContainerStepMountsWorkspace(t *testing.T) {
 	e := newTestExecutor(t, fc)
 	run, _ := e.Begin(context.Background(), proto.JobSpec{Env: []string{"FOO=bar"}}, func(string) {})
 	defer run.Close()
-	// The control plane sends Run as ["sh", "-c", "<script>"]; the runner runs it
-	// as the container entrypoint so an image's own ENTRYPOINT can't swallow it.
+	// The runner uses Run as the entrypoint so an image's own ENTRYPOINT can't swallow it.
 	_, err := run.Step(context.Background(), proto.StepSpec{
 		Name: "test", Image: "golang:1.25", Env: []string{"CI=true"}, Run: []string{"sh", "-c", "go test ./..."},
 	}, func(string) {})
@@ -298,8 +291,6 @@ func TestContainerStepMountsWorkspace(t *testing.T) {
 	}
 }
 
-// After a build step, a later container step sees the produced image reference
-// as MIABI_IMAGE / MIABI_IMAGE_DIGEST (so it can scan/test the built artifact).
 func TestContainerStepSeesBuiltImage(t *testing.T) {
 	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
 	e := newTestExecutor(t, fc)
@@ -324,9 +315,6 @@ func TestContainerStepSeesBuiltImage(t *testing.T) {
 	}
 }
 
-// Any variable a step writes to $MIABI_ENV is visible to later steps, and every
-// container step gets the env file mounted so it can export more — the generic
-// mechanism the build step's MIABI_IMAGE also rides on, with no per-var runner code.
 func TestStepEnvExportPropagates(t *testing.T) {
 	fc := &fakeCommander{}
 	e := newTestExecutor(t, fc)
@@ -380,9 +368,7 @@ func TestDeployStepIsNoop(t *testing.T) {
 	}
 }
 
-// The reported bug: `dockerfile:` reached the runner but a custom path has to
-// become `-f`, and the context has to stay independent of it — a monorepo keeps
-// docker/Dockerfile while still building from the root.
+// A custom dockerfile path becomes -f, and the context stays independent of it (monorepo docker/Dockerfile).
 func TestBuildStepDockerfileAndContext(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -438,10 +424,7 @@ func TestBuildStepDockerfileAndContext(t *testing.T) {
 	}
 }
 
-// A context is joined against the checked-out source, so an absolute path or a
-// climbing one would hand the build the runner's own filesystem. The runner is
-// shared across a workspace's pipelines and a pipeline file is editable by anyone
-// who can push a branch, so it re-checks rather than trusting the control plane.
+// The runner re-checks contexts: an escaping path would hand the build the runner's own filesystem.
 func TestBuildStepRejectsEscapingContext(t *testing.T) {
 	for _, bad := range []string{"/etc", "../../etc", "sub/../../.."} {
 		t.Run(bad, func(t *testing.T) {
@@ -469,8 +452,7 @@ func TestBuildStepRejectsEscapingContext(t *testing.T) {
 	}
 }
 
-// Build args must be deterministic (sorted) so the argv is testable, and must sit
-// before the positional context — docker reads the context as the last argument.
+// Build args must sit before the positional context; docker reads the context as the last argument.
 func TestBuildStepBuildArgs(t *testing.T) {
 	fc := &fakeCommander{digestOut: "reg.example.com/ws-42/web@sha256:cafebabe"}
 	e := newTestExecutor(t, fc)
@@ -499,8 +481,7 @@ func TestBuildStepBuildArgs(t *testing.T) {
 	}
 }
 
-// A resolved workspace secret must not reach the command line: argv is readable
-// by every local user on the runner host via ps.
+// argv is readable by every local user via ps, so secrets must stay out of it.
 func TestContainerStepKeepsEnvValuesOutOfArgv(t *testing.T) {
 	f := &fakeCommander{}
 	e := &dockerExecutor{cmd: f, docker: "docker", git: "git", workRoot: t.TempDir()}
@@ -540,8 +521,7 @@ func TestContainerStepKeepsEnvValuesOutOfArgv(t *testing.T) {
 	}
 }
 
-// Step env wins over the job's on a collision, matching the control plane's
-// documented precedence.
+// Step env wins over the job's, matching the control plane's documented precedence.
 func TestContainerStepEnvPrecedence(t *testing.T) {
 	f := &fakeCommander{}
 	e := &dockerExecutor{cmd: f, docker: "docker", git: "git", workRoot: t.TempDir()}
@@ -564,9 +544,7 @@ func TestContainerStepEnvPrecedence(t *testing.T) {
 	}
 }
 
-// Cache busting moved out of the Dockerfile: a build step can ask for a cold
-// build, and each backend has to spell it its own way. Caching stays the
-// default — a no-cache build costs minutes, so it is never implicit.
+// Caching stays the default: a no-cache build costs minutes, so it is never implicit.
 func TestBuildStepNoCache(t *testing.T) {
 	cases := []struct {
 		name    string
